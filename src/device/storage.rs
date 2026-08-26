@@ -1,0 +1,260 @@
+#![allow(dead_code)]
+
+use crate::drivers::fd6818b::Power;
+use crate::drivers::norflash::{NorFlash, PAGE_SIZE, SECTOR_SIZE};
+use crate::flash_map::{self, addr, Contact};
+use crate::hal::wear_leveled::WearLeveledRegion;
+
+/// Both VFO sides (A+B), combined into one wear-leveled record.
+const VFO_REGION: WearLeveledRegion<64> = WearLeveledRegion::new(addr::VFO_INFO_ADDR, 16);
+
+/// Global settings record.
+const SETTINGS_REGION: WearLeveledRegion<{ flash_map::SETTINGS_BYTES }> =
+    WearLeveledRegion::new(addr::RADIO_IMFOS_ADDR, 16);
+
+/// FM broadcast channel list: 30 slots x u16 (little-endian deci-MHz).
+const FM_PAYLOAD_LEN: usize = flash_map::FM_CHANNEL_COUNT * 2;
+const FM_REGION: WearLeveledRegion<FM_PAYLOAD_LEN> = WearLeveledRegion::new(addr::FM_ADDR, 16);
+
+/// Per-side last active VFO/Channel mode + selected channel number +
+/// modulation: bytes `half*3..half*3+3` are 1 mode byte + little-endian
+/// `u16` channel number, bytes `6+half` are the side's modulation raw byte.
+const CHANNEL_STATE_REGION: WearLeveledRegion<8> = WearLeveledRegion::new(addr::SYSTEMRAN_ADDR, 16);
+
+pub struct Storage<'a> {
+    pub(crate) norflash: NorFlash<'a>,
+    /// Bit `n` set = the channel-table sector `n` has already been erased
+    /// during the current CPS write session. Reset at session start; see
+    /// `write_channel` for why per-sector (not per-record) tracking is
+    /// enough.
+    channel_erased_mask: u8,
+}
+
+impl<'a> Storage<'a> {
+    pub fn new(norflash: NorFlash<'a>) -> Self {
+        Storage {
+            norflash,
+            channel_erased_mask: 0,
+        }
+    }
+
+    // settings
+    pub fn load_settings(&mut self) -> Option<flash_map::Settings> {
+        SETTINGS_REGION
+            .load(&mut self.norflash)
+            .map(|b| flash_map::Settings::from_bytes(&b))
+    }
+
+    pub fn save_settings(&mut self, settings: &flash_map::Settings) {
+        SETTINGS_REGION.save(&mut self.norflash, &settings.to_bytes());
+    }
+
+    // VFO
+    pub fn load_vfo_raw(&mut self) -> Option<[u8; 64]> {
+        VFO_REGION.load(&mut self.norflash)
+    }
+
+    pub fn save_vfo_raw(&mut self, buf: &[u8; 64]) {
+        VFO_REGION.save(&mut self.norflash, buf);
+    }
+
+    // channel/VFO mode state
+    pub fn load_channel_state(&mut self) -> Option<[u8; 8]> {
+        CHANNEL_STATE_REGION.load(&mut self.norflash)
+    }
+
+    pub fn save_channel_state(&mut self, buf: &[u8; 8]) {
+        CHANNEL_STATE_REGION.save(&mut self.norflash, buf);
+    }
+
+    // calibration
+
+    pub fn read_calibration(&mut self) -> [u8; crate::drivers::norflash::CAL_BLOCK_LEN] {
+        let mut buf = [0u8; crate::drivers::norflash::CAL_BLOCK_LEN];
+        self.norflash
+            .read_bytes(crate::drivers::norflash::CAL_BLOCK_ADDR, &mut buf);
+        buf
+    }
+
+    fn read_pa_byte(&mut self, addr: u32) -> u8 {
+        let mut buf = [0u8; 1];
+        self.norflash.read_bytes(addr, &mut buf);
+        buf[0]
+    }
+
+    fn pa_calibration_addr(freq_hz: u32, power: Power) -> Option<u32> {
+        let base = match power {
+            Power::High => addr::PA_TABLE_BASE_HIGH,
+            Power::Mid => addr::PA_TABLE_BASE_MID,
+            Power::Low => addr::PA_TABLE_BASE_LOW,
+        };
+        let mhz = freq_hz / 1_000_000;
+        if freq_hz >= 400_000_000 {
+            Some(base + (mhz - 400) / 10)
+        } else if freq_hz >= 200_000_000 {
+            Some(base + 0x20 + (mhz - 200) / 5)
+        } else if freq_hz >= 130_000_000 {
+            let idx = ((mhz - 130) / 3).min(15);
+            Some(base + 0x10 + idx)
+        } else {
+            None
+        }
+    }
+
+    /// Calibrated APC target byte for the given frequency+power, read
+    /// straight from flash. Returns `None` if the band isn't calibrated;
+    /// the caller decides what to do with the raw value.
+    pub fn read_pa_calibration(&mut self, freq_hz: u32, power: Power) -> Option<u8> {
+        let addr = Self::pa_calibration_addr(freq_hz, power)?;
+        Some(self.read_pa_byte(addr))
+    }
+
+    pub fn read_battery_calibration(&mut self) -> [u8; addr::DEV_BATT_LEN] {
+        let mut buf = [0u8; addr::DEV_BATT_LEN];
+        self.norflash.read_bytes(addr::DEV_BATT_ADDR, &mut buf);
+        if buf[0] == 0x00 || buf[0] == 0xFF {
+            buf = [130, 139, 156, 165, 183, 0];
+        }
+        buf
+    }
+
+    // FM broadcast channel list
+    pub fn load_fm_channels(&mut self) -> Option<[u16; flash_map::FM_CHANNEL_COUNT]> {
+        let buf = FM_REGION.load(&mut self.norflash)?;
+        let mut channels = [flash_map::FM_CHANNEL_EMPTY; flash_map::FM_CHANNEL_COUNT];
+        for (slot, pair) in channels.iter_mut().zip(buf.chunks_exact(2)) {
+            *slot = u16::from_le_bytes([pair[0], pair[1]]);
+        }
+        Some(channels)
+    }
+
+    pub fn save_fm_channels(&mut self, channels: &[u16; flash_map::FM_CHANNEL_COUNT]) {
+        let mut buf = [0u8; FM_PAYLOAD_LEN];
+        for (pair, &v) in buf.chunks_exact_mut(2).zip(channels.iter()) {
+            pair.copy_from_slice(&v.to_le_bytes());
+        }
+        FM_REGION.save(&mut self.norflash, &buf);
+    }
+
+    // channels
+    pub fn read_channel(&mut self, num: u16) -> flash_map::Channel {
+        let addr = addr::CHAN_ADDR + num as u32 * addr::CHAN_SIZE;
+        let mut buf = [0u8; addr::CHAN_SIZE as usize];
+        self.norflash.read_bytes(addr, &mut buf);
+        flash_map::Channel::from_bytes(&buf)
+    }
+
+    pub fn is_channel_empty(&mut self, num: u16) -> bool {
+        let addr = addr::CHAN_ADDR + num as u32 * addr::CHAN_SIZE;
+        let mut buf = [0u8; addr::CHAN_SIZE as usize];
+        self.norflash.read_bytes(addr, &mut buf);
+        buf.iter().all(|&b| b == 0xFF)
+    }
+
+    /// Call once at the start of a CPS write session, before any
+    /// `write_channel` calls, so each touched sector gets erased exactly
+    /// once for the session.
+    pub fn reset_channel_write_session(&mut self) {
+        self.channel_erased_mask = 0;
+    }
+
+    pub fn write_channel(&mut self, num: u16, channel: &flash_map::Channel) {
+        let addr = addr::CHAN_ADDR + num as u32 * addr::CHAN_SIZE;
+        let sector = addr / SECTOR_SIZE;
+        let bit = 1u8 << sector;
+
+        if self.channel_erased_mask & bit == 0 {
+            self.norflash.erase_sector(sector * SECTOR_SIZE);
+            self.channel_erased_mask |= bit;
+        }
+
+        self.norflash.write_bytes(addr, &channel.to_bytes());
+    }
+
+    fn rmw_sector_record(&mut self, record_addr: u32, new_record: &[u8]) {
+        let sector_addr = (record_addr / SECTOR_SIZE) * SECTOR_SIZE;
+        let record_off = (record_addr - sector_addr) as usize;
+        let record_end = record_off + new_record.len();
+
+        // Stage 1: sector -> scratch, patching in the new record on the fly.
+        self.norflash.erase_sector(addr::RMW_SCRATCH_ADDR);
+        let mut page = [0u8; PAGE_SIZE];
+        let mut off = 0usize;
+        while off < SECTOR_SIZE as usize {
+            self.norflash
+                .read_bytes(sector_addr + off as u32, &mut page);
+            let page_end = off + PAGE_SIZE;
+            if record_off < page_end && record_end > off {
+                let lo = record_off.max(off);
+                let hi = record_end.min(page_end);
+                page[lo - off..hi - off]
+                    .copy_from_slice(&new_record[lo - record_off..hi - record_off]);
+            }
+            self.norflash
+                .write_bytes(addr::RMW_SCRATCH_ADDR + off as u32, &page);
+            off += PAGE_SIZE;
+        }
+
+        // Stage 2: erase the real sector, copy the staged (patched) content back.
+        self.norflash.erase_sector(sector_addr);
+        let mut off = 0usize;
+        while off < SECTOR_SIZE as usize {
+            self.norflash
+                .read_bytes(addr::RMW_SCRATCH_ADDR + off as u32, &mut page);
+            self.norflash.write_bytes(sector_addr + off as u32, &page);
+            off += PAGE_SIZE;
+        }
+    }
+
+    pub fn write_channel_rmw(&mut self, num: u16, channel: &flash_map::Channel) {
+        let addr = addr::CHAN_ADDR + num as u32 * addr::CHAN_SIZE;
+        self.rmw_sector_record(addr, &channel.to_bytes());
+    }
+
+    pub fn read_contact(&mut self, idx: u8) -> Contact {
+        let addr = addr::DTMF_CODE_ADDR + idx as u32 * addr::CONTACT_SIZE;
+        let mut buf = [0u8; addr::CONTACT_SIZE as usize];
+        self.norflash.read_bytes(addr, &mut buf);
+        Contact::from_bytes(&buf)
+    }
+
+    pub fn write_contact(&mut self, idx: u8, contact: &Contact) {
+        let addr = addr::DTMF_CODE_ADDR + idx as u32 * addr::CONTACT_SIZE;
+        self.rmw_sector_record(addr, &contact.to_bytes());
+    }
+
+    // factory reset
+    pub fn factory_reset(&mut self) {
+        self.norflash.erase_sector(addr::VFO_INFO_ADDR);
+        self.norflash.erase_sector(addr::RADIO_IMFOS_ADDR);
+        self.norflash.erase_sector(addr::SYSTEMRAN_ADDR);
+    }
+
+    /// True once `first_boot_format` has run on this device.
+    pub fn is_first_boot_done(&mut self) -> bool {
+        let mut buf = [0u8; flash_map::FIRST_BOOT_MAGIC.len()];
+        self.norflash
+            .read_bytes(addr::FIRST_BOOT_MARKER_ADDR, &mut buf);
+        buf == flash_map::FIRST_BOOT_MAGIC
+    }
+
+    pub fn mark_first_boot_done(&mut self) {
+        self.norflash.erase_sector(addr::FIRST_BOOT_MARKER_ADDR);
+        self.norflash
+            .write_bytes(addr::FIRST_BOOT_MARKER_ADDR, &flash_map::FIRST_BOOT_MAGIC);
+    }
+
+    /// One-time cleanup for a device that may still carry non-erased
+    /// factory data in flash regions our own record parsers only treat as
+    /// "blank" when literally all-`0xFF`. Deliberately leaves the channel
+    /// table alone: its byte layout is meant to match the factory's.
+    pub fn first_boot_format(&mut self) {
+        self.factory_reset(); // VFO, settings, channel-state
+        self.norflash.erase_sector(addr::DTMFINFOR_ADDR); // ANI id + DTMF contacts
+        self.norflash.erase_sector(addr::FM_ADDR);
+    }
+
+    pub fn read_raw(&mut self, addr: u32, buf: &mut [u8]) {
+        self.norflash.read_bytes(addr, buf);
+    }
+}

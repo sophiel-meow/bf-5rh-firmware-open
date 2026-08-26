@@ -1,0 +1,559 @@
+//! UV-5RH (AT32F421C8T7) bring-up: flashlight heartbeat + USART1 debug
+//! print + keyboard-matrix scan + ST7735 LCD color-cycle test.
+//!
+//! Pin assignments are all from `docs/uv5rh-io-map.md` in the main repo
+//! (reverse-engineered from the stock firmware's disassembly, keyboard
+//! coordinates additionally cross-checked against real hardware -- see
+//! section 12.4):
+//!   - PF7            : flashlight LED, push-pull output (section 3).
+//!   - PA9            : USART1_TX, debug print, TX-only (section 7).
+//!   - PA10           : USART1_RX / PTT, left as a plain input here so we
+//!                      don't step on PTT -- this firmware never drives it
+//!                      and never configures it for the USART AF.
+//!   - PB8/9/10/11    : keyboard matrix columns, push-pull output.
+//!   - PB3/4/5/6      : keyboard matrix rows, input with pull-up.
+//!   - PA15           : side key 2 (flashlight toggle on the stock
+//!                      firmware), independent pin, checked before the
+//!                      matrix scan (highest priority).
+//!   - PB2            : LCD CS, push-pull output (software chip-select,
+//!                      not the SPI2 hardware NSS pin).
+//!   - PB12           : LCD RESET, push-pull output.
+//!   - PB13           : SPI2_SCK, AF0.
+//!   - PB14           : LCD DC/RS (command=low, data=high), push-pull
+//!                      output.
+//!   - PB15           : SPI2_MOSI, AF0.
+//!   - PA4            : LCD backlight enable, push-pull output, driven
+//!                      high once at boot.
+//!
+//! The keyboard coordinate table below (round/col + row -> physical key)
+//! is no longer a guess: it comes from pressing every physical button on
+//! real hardware with an earlier build of this firmware and reading back
+//! the raw (round, row-bit) coordinates it printed. See
+//! `docs/uv5rh-io-map.md` section 12.4 for the full writeup, including
+//! how this contradicted (and corrected) two earlier rounds of
+//! disassembly-only guessing.
+//!
+//! LCD init sequence (register numbers and every parameter byte) is
+//! reverse-engineered from the stock firmware's own init table, see
+//! `docs/uv5rh-lcd-controller.md`. **Confirmed working on real
+//! hardware** -- the screen refreshes with the color-cycle test below.
+//!
+//! LCD backlight: **confirmed PA4**, active-high, real hardware tested
+//! via a candidate sweep (PC14 alone, tried first as a disassembly-only
+//! guess, was ruled out; PA4 alone lit the backlight). See
+//! `docs/uv5rh-io-map.md` section 11.6/12.x for the writeup.
+//!
+//! Orientation: MADCTL=0x60 sets MV=1 (row/column exchange), which makes
+//! this a landscape 160(w)x128(h) display for addressing purposes even
+//! though the panel's native GRAM is often described as 128x160 --
+//! `LCD_WIDTH`/`LCD_HEIGHT` below are already swapped accordingly (an
+//! earlier build that used 128x160 for CASET/RASET only filled the left
+//! ~80% of the screen on real hardware, which is what motivated this).
+//!
+//! Clock: nothing here configures CRM/PLL, so the chip runs on its
+//! default reset clock -- HICK direalt, no PLL, 48MHz nominal (see the
+//! datasheet's factory-calibrated internal RC oscillator spec). USART1's
+//! baud divisor and the LCD SPI2 clock divisor below are both computed
+//! against that 48MHz assumption; neither has anything to do with
+//! whatever clock/baud the stock firmware itself uses at those points.
+#![no_std]
+#![no_main]
+
+use at32f421_pac as pac;
+use core::fmt::Write;
+use cortex_m_rt::entry;
+use panic_halt as _;
+
+const HICK_HZ: u32 = 48_000_000;
+const BAUD: u32 = 115_200;
+const CYCLES_PER_MS: u32 = HICK_HZ / 1_000;
+
+fn delay(cycles: u32) {
+    cortex_m::asm::delay(cycles);
+}
+
+fn delay_ms(ms: u32) {
+    delay(ms.saturating_mul(CYCLES_PER_MS));
+}
+
+/// Physical key name for a matrix (round, row_bit) coordinate, per the
+/// real-hardware-verified table in `docs/uv5rh-io-map.md` section 12.4.
+/// `round` is `0` for the direct/round0 pass, `1..=4` for columns
+/// PB8..PB11; `row_bit` is `0..=3` for rows PB3..PB6.
+fn key_name(round: u8, row_bit: u8) -> &'static str {
+    match (round, row_bit) {
+        (0, 0) => "AB",
+        (0, 1) => "VM",
+        (0, 2) => "SCAN",
+        (0, 3) => "Side1(FM)",
+        (1, 0) => "1",
+        (1, 1) => "2",
+        (1, 2) => "3",
+        (1, 3) => "*",
+        (2, 0) => "4",
+        (2, 1) => "5",
+        (2, 2) => "6",
+        (2, 3) => "0",
+        (3, 0) => "7",
+        (3, 1) => "8",
+        (3, 2) => "9",
+        (3, 3) => "#",
+        (4, 0) => "UP",
+        (4, 1) => "DOWN",
+        (4, 2) => "MENU",
+        (4, 3) => "EXIT",
+        _ => "?",
+    }
+}
+
+// ---- FD6818/FD6818B RFIC bus (one-shot chip-ID probe) ----
+//
+// SCLK=PA2, SDIO=PA3 (bidirectional, MSB-first), LE=PC13 (active low
+// during a transaction, high the rest of the time) -- the *UV-5RH board's*
+// pins for this bus, per `docs/uv5rh-io-map.md` section 8/13 ("高确定性"),
+// reverse-engineered from the 5RH's own firmware disassembly. This is
+// **not** the same wiring as `src/Driver/DevFD6818.c`'s
+// `RFIC_SCN`/`RFIC_SCK`/`RFIC_SDA` macros (PB3/PB5/PB6) -- those encode
+// the *K6 board's* wiring for the same chip driver, which section 13 of
+// that doc explicitly calls out as different from the 5RH's. An earlier
+// version of this probe used the K6 pins by mistake and read back
+// `0xFFFF` -- the textbook "nothing is driving this line" result, since
+// PB3/5/6 aren't connected to the RF chip on this board at all.
+//
+// PA3 (SDIO) is shared with the RDA5807 FM chip's I2C SDA on this board
+// (section 14); harmless here since nothing else touches PA3 yet. PC13 is
+// otherwise unused in this firmware.
+//
+// There's no register formally named "chip ID" in either FD6818 datasheet
+// we have. But the stock firmware's own `Rfic_Init()` has a disabled
+// (`#if 0`) block that reads register address 0x00 (the same address
+// that's Soft Reset on a *write*) and calls the result `chipID`, printing
+// it over UART -- this is almost certainly the mechanism referenced in
+// https://github.com/cnt7/BAOFENG-UV-K6-Firmware/issues/1, where someone
+// on FD6818B hardware read back `0x4829`. Reading it here is a cheap way
+// to check whether this radio's chip reports something distinguishable
+// before spending more effort on register-level driver work.
+const RFIC_LE_BIT: u32 = 1 << 13; // PC13
+const RFIC_SCK_BIT: u32 = 1 << 2; // PA2
+const RFIC_SDA_BIT: u32 = 1 << 3; // PA3
+
+fn rfic_bit_delay() {
+    delay(250); // ballpark ~5us at 48MHz HICK, not timing-critical for a one-shot read
+}
+
+fn rfic_sda_as_output(gpioa: &pac::Gpioa) {
+    gpioa.cfgr().modify(|_, w| unsafe { w.iomc3().bits(0b01) });
+    gpioa.pull().modify(|_, w| unsafe { w.pull3().bits(0b00) });
+}
+
+fn rfic_sda_as_input(gpioa: &pac::Gpioa) {
+    gpioa.cfgr().modify(|_, w| unsafe { w.iomc3().bits(0b00) });
+    gpioa.pull().modify(|_, w| unsafe { w.pull3().bits(0b01) }); // pull-up while floating between bits
+}
+
+fn rfic_write_byte(gpioa: &pac::Gpioa, byte: u8) {
+    let mut mask: u8 = 0x80;
+    while mask != 0 {
+        gpioa.clr().write(|w| unsafe { w.bits(RFIC_SCK_BIT) });
+        if byte & mask != 0 {
+            gpioa.scr().write(|w| unsafe { w.bits(RFIC_SDA_BIT) });
+        } else {
+            gpioa.clr().write(|w| unsafe { w.bits(RFIC_SDA_BIT) });
+        }
+        rfic_bit_delay();
+        gpioa.scr().write(|w| unsafe { w.bits(RFIC_SCK_BIT) });
+        rfic_bit_delay();
+        mask >>= 1;
+    }
+}
+
+/// Reads one 16-bit FD6818/FD6818B register. Ported from `Rfic_ReadWord`
+/// in `src/Driver/DevFD6818.c`, with LE (PC13) taking the role that
+/// `RFIC_SCN` plays there (asserted low before the transaction, high
+/// after -- see `docs/uv5rh-io-map.md` section 8, "事务前后写 ... LE").
+fn rfic_read_reg(gpioa: &pac::Gpioa, gpioc: &pac::Gpioc, addr: u8) -> u16 {
+    let mut mask: u16 = 0x8000;
+    let mut data: u16 = 0;
+    gpioc.clr().write(|w| unsafe { w.bits(RFIC_LE_BIT) });
+    rfic_bit_delay();
+    rfic_write_byte(gpioa, addr | 0x80);
+    gpioa.clr().write(|w| unsafe { w.bits(RFIC_SCK_BIT) });
+    rfic_bit_delay();
+    rfic_sda_as_input(gpioa);
+    rfic_bit_delay();
+    while mask != 0 {
+        data <<= 1;
+        gpioa.scr().write(|w| unsafe { w.bits(RFIC_SCK_BIT) });
+        if gpioa.idt().read().bits() & RFIC_SDA_BIT != 0 {
+            data |= 1;
+        }
+        rfic_bit_delay();
+        gpioa.clr().write(|w| unsafe { w.bits(RFIC_SCK_BIT) });
+        rfic_bit_delay();
+        mask >>= 1;
+    }
+    rfic_sda_as_output(gpioa);
+    gpioc.scr().write(|w| unsafe { w.bits(RFIC_LE_BIT) });
+    rfic_bit_delay();
+    gpioa.clr().write(|w| unsafe { w.bits(RFIC_SDA_BIT | RFIC_SCK_BIT) });
+    data
+}
+
+struct Serial {
+    usart1: pac::Usart1,
+}
+
+impl Serial {
+    fn write_byte(&mut self, b: u8) {
+        while self.usart1.sts().read().tdbe().bit_is_clear() {}
+        self.usart1.dt().write(|w| unsafe { w.dt().bits(b as u16) });
+    }
+}
+
+impl Write for Serial {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for &b in s.as_bytes() {
+            if b == b'\n' {
+                self.write_byte(b'\r');
+            }
+            self.write_byte(b);
+        }
+        Ok(())
+    }
+}
+
+/// Columns: PB8, PB9, PB10, PB11 (bits 8-11 of GPIOB).
+/// Rows: PB3, PB4, PB5, PB6 (bits 3-6 of GPIOB), read as one 4-bit nibble.
+const COL_MASK: u32 = 0x0F00; // bits 8-11
+const ROW_MASK: u32 = 0x0078; // bits 3-6
+
+/// Drives exactly one column low (col = 0..=3), or none (col = None, the
+/// stock firmware's "round 0" that catches independently-wired keys), then
+/// returns which row bits read low (bit N of the result = PB(3+N) pressed).
+fn scan_round(gpiob: &pac::Gpiob, col: Option<u8>) -> u8 {
+    let low_bit = col.map(|c| 8 + c).unwrap_or(255);
+    for pin in 8u8..12 {
+        if pin == low_bit {
+            gpiob.clr().write(|w| unsafe { w.bits(1u32 << pin) });
+        } else {
+            gpiob.scr().write(|w| unsafe { w.bits(1u32 << pin) });
+        }
+    }
+    delay(500); // settle time, matches the stock firmware's ~5us KeyReadDelay ballpark
+    let idt = gpiob.idt().read().bits();
+    let rows_low = !idt & ROW_MASK;
+    (rows_low >> 3) as u8 // bit0=PB3 .. bit3=PB6
+}
+
+/// One raw scan pass. Returns `Some((round, row_bit))` for the first match
+/// found, where `round` is `0` for the "all columns high" pass and `1..=4`
+/// for columns PB8..PB11 driven low, and `row_bit` is `0..=3` for
+/// PB3..PB6. Only ever reports one key -- no ghosting/rollover handling.
+fn scan_matrix(gpiob: &pac::Gpiob) -> Option<(u8, u8)> {
+    for round in 0u8..5 {
+        let col = if round == 0 { None } else { Some(round - 1) };
+        let rows = scan_round(gpiob, col);
+        if rows != 0 {
+            return Some((round, rows.trailing_zeros() as u8));
+        }
+    }
+    None
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct KeyState {
+    matrix: Option<(u8, u8)>,
+    pa15: bool,
+    ptt: bool,
+}
+
+// ---- LCD (ST7735-compatible, hardware SPI2) ----
+//
+// CS = PB2, RESET = PB12, DC/RS = PB14 (all plain push-pull GPIO, driven
+// by hand -- CS is *not* the SPI2 hardware NSS pin). SCK = PB13, MOSI =
+// PB15 (SPI2 AF0). See docs/uv5rh-lcd-controller.md and
+// docs/uv5rh-io-map.md section 5/11.1 for how these were identified.
+
+const LCD_CS_BIT: u32 = 1 << 2;
+const LCD_RST_BIT: u32 = 1 << 12;
+const LCD_DC_BIT: u32 = 1 << 14;
+// Swapped from the panel's native 128x160 -- MADCTL=0x60 sets MV=1
+// (row/column exchange), so CASET/RASET need the post-rotation landscape
+// extents. See the module doc.
+const LCD_WIDTH: u16 = 160;
+const LCD_HEIGHT: u16 = 128;
+
+/// LCD backlight enable, confirmed PA4/active-high on real hardware.
+const BACKLIGHT_PA4_BIT: u32 = 1 << 4;
+
+struct Lcd<'a> {
+    gpiob: &'a pac::Gpiob,
+    spi2: &'a pac::Spi2,
+}
+
+impl<'a> Lcd<'a> {
+    fn cs_low(&self) {
+        self.gpiob.clr().write(|w| unsafe { w.bits(LCD_CS_BIT) });
+    }
+    fn cs_high(&self) {
+        self.gpiob.scr().write(|w| unsafe { w.bits(LCD_CS_BIT) });
+    }
+    fn dc_command(&self) {
+        self.gpiob.clr().write(|w| unsafe { w.bits(LCD_DC_BIT) });
+    }
+    fn dc_data(&self) {
+        self.gpiob.scr().write(|w| unsafe { w.bits(LCD_DC_BIT) });
+    }
+    fn reset_pin(&self, high: bool) {
+        if high {
+            self.gpiob.scr().write(|w| unsafe { w.bits(LCD_RST_BIT) });
+        } else {
+            self.gpiob.clr().write(|w| unsafe { w.bits(LCD_RST_BIT) });
+        }
+    }
+
+    fn spi_write_byte(&self, b: u8) {
+        while self.spi2.sts().read().tdbe().bit_is_clear() {}
+        self.spi2.dt().write(|w| unsafe { w.dt().bits(b as u16) });
+    }
+    fn spi_wait_idle(&self) {
+        while self.spi2.sts().read().bf().bit_is_set() {}
+    }
+
+    fn write_command(&self, cmd: u8) {
+        self.dc_command();
+        self.cs_low();
+        self.spi_write_byte(cmd);
+        self.spi_wait_idle();
+        self.cs_high();
+    }
+
+    fn write_data(&self, bytes: &[u8]) {
+        self.dc_data();
+        self.cs_low();
+        for &b in bytes {
+            self.spi_write_byte(b);
+        }
+        self.spi_wait_idle();
+        self.cs_high();
+    }
+
+    fn command(&self, cmd: u8, args: &[u8]) {
+        self.write_command(cmd);
+        if !args.is_empty() {
+            self.write_data(args);
+        }
+    }
+
+    /// Hardware reset + the stock firmware's own ST7735 init table
+    /// (`docs/uv5rh-lcd-controller.md`), plus the SLPOUT the stock table
+    /// didn't happen to capture but every ST7735 needs after reset.
+    fn init(&self) {
+        self.reset_pin(true);
+        delay_ms(10);
+        self.reset_pin(false);
+        delay_ms(10);
+        self.reset_pin(true);
+        delay_ms(120);
+
+        self.command(0x11, &[]); // SLPOUT
+        delay_ms(120);
+
+        self.command(0xB1, &[0x05, 0x3A, 0x3A]); // FRMCTR1
+        self.command(0xB2, &[0x05, 0x3A, 0x3A]); // FRMCTR2
+        self.command(0xB3, &[0x05, 0x3A, 0x3A, 0x05, 0x3A, 0x3A]); // FRMCTR3
+        self.command(0xB4, &[0x03]); // INVCTR
+        self.command(0xC0, &[0x62, 0x02, 0x04]); // PWCTR1
+        self.command(0xC1, &[0xC0]); // PWCTR2
+        self.command(0xC2, &[0x0D, 0x00]); // PWCTR3
+        self.command(0xC3, &[0x8D, 0x6A]); // PWCTR4
+        self.command(0xC4, &[0x8D, 0xEE]); // PWCTR5
+        self.command(0xC5, &[0x12]); // VMCTR1
+        self.command(
+            0xE0,
+            &[0x03, 0x1B, 0x12, 0x11, 0x3F, 0x3A, 0x32, 0x34, 0x2F, 0x2B, 0x30, 0x3A, 0x00, 0x00, 0x01, 0x05],
+        ); // GMCTRP1
+        self.command(
+            0xE1,
+            &[0x03, 0x1B, 0x12, 0x11, 0x32, 0x2F, 0x2A, 0x2F, 0x2E, 0x2C, 0x35, 0x3F, 0x00, 0x00, 0x01, 0x05],
+        ); // GMCTRN1
+        self.command(0xFC, &[0x8C]); // vendor extension, purpose unknown
+        self.command(0x36, &[0x60]); // MADCTL
+        self.command(0x3A, &[0x05]); // COLMOD = RGB565
+        delay_ms(10);
+        self.command(0x29, &[]); // DISPON
+    }
+
+    fn set_window(&self, x0: u16, y0: u16, x1: u16, y1: u16) {
+        self.command(0x2A, &[(x0 >> 8) as u8, x0 as u8, (x1 >> 8) as u8, x1 as u8]); // CASET
+        self.command(0x2B, &[(y0 >> 8) as u8, y0 as u8, (y1 >> 8) as u8, y1 as u8]); // RASET
+    }
+
+    fn fill_screen(&self, color: u16) {
+        self.set_window(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1);
+        self.write_command(0x2C); // RAMWR
+        self.dc_data();
+        self.cs_low();
+        let hi = (color >> 8) as u8;
+        let lo = color as u8;
+        for _ in 0..(LCD_WIDTH as u32 * LCD_HEIGHT as u32) {
+            self.spi_write_byte(hi);
+            self.spi_write_byte(lo);
+        }
+        self.spi_wait_idle();
+        self.cs_high();
+    }
+}
+
+#[entry]
+fn main() -> ! {
+    // SAFETY: called once, at the very start of `main`, before anything
+    // else could have taken these peripherals.
+    let dp = unsafe { pac::Peripherals::steal() };
+
+    dp.crm.ahben().modify(|_, w| {
+        w.gpioaen().set_bit().gpioben().set_bit().gpiocen().set_bit().gpiofen().set_bit()
+    });
+    dp.crm.apb2en().modify(|_, w| w.usart1en().set_bit());
+    let _ = dp.crm.ahben().read();
+
+    // PF7 = flashlight, push-pull output.
+    dp.gpiof.cfgr().modify(|_, w| unsafe { w.iomc7().bits(0b01) });
+    dp.gpiof.omode().modify(|_, w| w.om7().clear_bit());
+
+    // PA9 = USART1_TX, AF mux 1 (matches the stock firmware's own
+    // gpio_pin_mux_config(GPIOA, 9, 1) call, see docs/uv5rh-io-map.md
+    // section 7). PA10 deliberately left untouched -- see module doc.
+    dp.gpioa.cfgr().modify(|_, w| unsafe { w.iomc9().bits(0b10) });
+    dp.gpioa.muxh().modify(|_, w| unsafe { w.muxh9().bits(1) });
+
+    // PA15 = independent key, input with pull-up.
+    dp.gpioa.cfgr().modify(|_, w| unsafe { w.iomc15().bits(0b00) });
+    dp.gpioa.pull().modify(|_, w| unsafe { w.pull15().bits(0b01) });
+
+    // PA10 = PTT, input with pull-up (read-only here, never used as UART RX).
+    dp.gpioa.cfgr().modify(|_, w| unsafe { w.iomc10().bits(0b00) });
+    dp.gpioa.pull().modify(|_, w| unsafe { w.pull10().bits(0b01) });
+
+    // PB8-11 = matrix columns, push-pull output, idle high.
+    dp.gpiob.cfgr().modify(|_, w| unsafe {
+        w.iomc8().bits(0b01).iomc9().bits(0b01).iomc10().bits(0b01).iomc11().bits(0b01)
+    });
+    dp.gpiob.scr().write(|w| unsafe { w.bits(COL_MASK) });
+
+    // One-shot FD6818/FD6818B chip-ID probe: PA2/PA3/PC13 as the RFIC bus
+    // (SCLK/SDIO/LE), read register 0x00. Runs before PA3/PB3-6 get used
+    // for anything else. See the module-level comment on `rfic_read_reg`
+    // for why register 0 and what this is checking. PA2/PA3 are otherwise
+    // unused by this firmware (PA10 is the only other USART pin touched);
+    // PC13 gets reused below only as a plain output, so nothing conflicts.
+    dp.gpioa.cfgr().modify(|_, w| unsafe {
+        w.iomc2().bits(0b01).iomc3().bits(0b01)
+    });
+    dp.gpioa.pull().modify(|_, w| unsafe { w.pull2().bits(0b00).pull3().bits(0b00) });
+    dp.gpioc.cfgr().modify(|_, w| unsafe { w.iomc13().bits(0b01) });
+    dp.gpioc.scr().write(|w| unsafe { w.bits(RFIC_LE_BIT) });
+    dp.gpioa.scr().write(|w| unsafe { w.bits(RFIC_SCK_BIT) });
+    let fd6818_reg0 = rfic_read_reg(&dp.gpioa, &dp.gpioc, 0x00);
+
+    // PB3-6 = matrix rows, input with pull-up.
+    dp.gpiob.cfgr().modify(|_, w| unsafe {
+        w.iomc3().bits(0b00).iomc4().bits(0b00).iomc5().bits(0b00).iomc6().bits(0b00)
+    });
+    dp.gpiob.pull().modify(|_, w| unsafe {
+        w.pull3().bits(0b01).pull4().bits(0b01).pull5().bits(0b01).pull6().bits(0b01)
+    });
+
+    // PB2/PB12/PB14 = LCD CS/RESET/DC, push-pull output, idle high (CS/RESET
+    // deasserted). PB13/PB15 = SPI2_SCK/MOSI, AF0.
+    dp.gpiob.cfgr().modify(|_, w| unsafe {
+        w.iomc2().bits(0b01).iomc12().bits(0b01).iomc13().bits(0b10).iomc14().bits(0b01).iomc15().bits(0b10)
+    });
+    dp.gpiob.muxh().modify(|_, w| unsafe { w.muxh13().bits(0).muxh15().bits(0) });
+    dp.gpiob.scr().write(|w| unsafe { w.bits(LCD_CS_BIT | LCD_RST_BIT) });
+
+    // PA4 = LCD backlight enable, push-pull output, driven high.
+    // Confirmed on real hardware (PC14 was tried first as a
+    // disassembly-only guess and ruled out; a candidate sweep across
+    // PF6/PA4/PC14 found PA4 alone lights the backlight).
+    dp.gpioa.cfgr().modify(|_, w| unsafe { w.iomc4().bits(0b01) });
+    dp.gpioa.scr().write(|w| unsafe { w.bits(BACKLIGHT_PA4_BIT) });
+
+    dp.crm.apb1en().modify(|_, w| w.spi2en().set_bit());
+    // Master mode, SPI mode 0 (CPOL=0/CPHA=0), MSB-first, /32 (~1.5MHz at
+    // 48MHz HICK) -- deliberately slow for a first bring-up over the flex
+    // cable. SWCSEN+SWCSIL: software NSS management, forced high, since CS
+    // is a plain GPIO pin here, not SPI2's hardware NSS.
+    dp.spi2.ctrl1().write(|w| unsafe {
+        w.msten().set_bit().mdiv2_0().bits(4).swcsen().set_bit().swcsil().set_bit()
+    });
+    dp.spi2.ctrl1().modify(|_, w| w.spien().set_bit());
+
+    let div = ((HICK_HZ + BAUD / 2) / BAUD) as u16;
+    dp.usart1.baudr().write(|w| unsafe { w.div().bits(div) });
+    dp.usart1.ctrl1().write(|w| w.ten().set_bit().uen().set_bit());
+
+    let mut serial = Serial { usart1: dp.usart1 };
+    writeln!(serial, "\r\nbf5rh-fw: uart+keys+lcd bring-up, HICK={HICK_HZ}Hz baud={BAUD} div={div}").ok();
+    writeln!(serial, "fd6818: reg 0x00 read back = {fd6818_reg0:#06x}").ok();
+
+    let lcd = Lcd { gpiob: &dp.gpiob, spi2: &dp.spi2 };
+    writeln!(serial, "lcd: init...").ok();
+    lcd.init();
+    writeln!(serial, "lcd: init done, starting color cycle").ok();
+
+    const COLORS: [(u16, &str); 5] =
+        [(0xF800, "red"), (0x07E0, "green"), (0x001F, "blue"), (0xFFFF, "white"), (0x0000, "black")];
+    let mut color_idx: usize = 0;
+    let mut color_tick: u32 = 0;
+
+    let mut last = KeyState { matrix: None, pa15: false, ptt: false };
+    let mut heartbeat: u32 = 0;
+
+    loop {
+        color_tick += 1;
+        if color_tick >= 240 {
+            color_tick = 0;
+            let (color, name) = COLORS[color_idx];
+            writeln!(serial, "lcd: fill {name}").ok();
+            lcd.fill_screen(color);
+            color_idx = (color_idx + 1) % COLORS.len();
+        }
+
+        let matrix = scan_matrix(&dp.gpiob);
+        let pa15 = dp.gpioa.idt().read().bits() & (1 << 15) == 0;
+        let ptt = dp.gpioa.idt().read().bits() & (1 << 10) == 0;
+        let state = KeyState { matrix, pa15, ptt };
+
+        if state != last {
+            if let Some((round, bit)) = state.matrix {
+                let name = key_name(round, bit);
+                writeln!(serial, "key: {name} (round={round} row_bit={bit})").ok();
+            } else if last.matrix.is_some() {
+                writeln!(serial, "key: released").ok();
+            }
+            if state.pa15 && !last.pa15 {
+                writeln!(serial, "key: Side2(flashlight) pressed (PA15)").ok();
+            } else if !state.pa15 && last.pa15 {
+                writeln!(serial, "key: Side2(flashlight) released (PA15)").ok();
+            }
+            if state.ptt && !last.ptt {
+                writeln!(serial, "PTT (PA10): pressed").ok();
+            } else if !state.ptt && last.ptt {
+                writeln!(serial, "PTT (PA10): released").ok();
+            }
+            last = state;
+        }
+
+        heartbeat = heartbeat.wrapping_add(1);
+        if heartbeat % 50 == 0 {
+            if heartbeat % 100 == 0 {
+                dp.gpiof.scr().write(|w| w.iosb7().set_bit());
+            } else {
+                dp.gpiof.clr().write(|w| w.iocb7().set_bit());
+            }
+        }
+
+        delay(200_000); // ~a few ms of scan pacing, no real debounce filtering
+    }
+}

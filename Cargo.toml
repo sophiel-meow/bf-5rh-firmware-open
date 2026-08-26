@@ -1,0 +1,30 @@
+[package]
+name = "bf5rh-fw"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "bf5rh-fw"
+test = false
+bench = false
+
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rt = { version = "0.7", features = ["device"] }
+panic-halt = "0.2"
+at32f421-pac = { path = "at32f421-pac", features = ["rt"] }
+embedded-graphics = "0.8"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = true
+panic = "abort"
+
+[profile.dev]
+opt-level = "z"
+panic = "abort"
+lto = true
+codegen-units = 1
+overflow-checks = false
