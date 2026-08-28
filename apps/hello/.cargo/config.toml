@@ -1,0 +1,4 @@
+#   RUSTFLAGS="-C link-arg=-Tapp.x -C link-arg=--nmagic" \
+#     cargo build --release
+[build]
+target = "thumbv7em-none-eabihf"

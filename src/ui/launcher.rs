@@ -3,7 +3,7 @@ use crate::app;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 
-struct LauncherSource<'a, 'b>(&'a app::App<'b>);
+struct LauncherSource<'a, 'b>(&'a mut app::App<'b>);
 
 impl<'a, 'b> ListSource for LauncherSource<'a, 'b> {
     fn row_count(&mut self) -> usize {
@@ -11,7 +11,7 @@ impl<'a, 'b> ListSource for LauncherSource<'a, 'b> {
     }
 
     fn label(&mut self, index: usize, w: &mut dyn core::fmt::Write) {
-        let _ = write!(w, "{}", self.0.launcher_label_at(index));
+        self.0.launcher_label_at(index, w);
     }
 
     fn value(&mut self, index: usize, w: &mut dyn core::fmt::Write) -> bool {
@@ -24,10 +24,11 @@ impl<'a, 'b> ListSource for LauncherSource<'a, 'b> {
     }
 }
 
-pub fn draw_app_menu<D>(lcd: &mut D, app: &app::App, cache: &mut Cache)
+pub fn draw_app_menu<D>(lcd: &mut D, app: &mut app::App, cache: &mut Cache)
 where
     D: DrawTarget<Color = Rgb565>,
 {
+    let index = app.launcher_index();
     let mut source = LauncherSource(app);
-    draw_list(lcd, "MENU", &mut source, app.launcher_index(), false, cache);
+    draw_list(lcd, "MENU", &mut source, index, false, cache);
 }

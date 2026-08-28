@@ -1,7 +1,5 @@
-use super::chanmgr;
-use super::fm;
 use super::keyfn;
-use super::launcher::{LauncherEntry, LAUNCHER_ITEMS};
+use super::launcher::{self, LauncherEntry, STATIC_ITEMS};
 use super::settings;
 use super::settings_ops;
 use super::{
@@ -48,11 +46,10 @@ pub(super) fn dispatch(app: &mut App, syst: &mut SYST, ev: KeyEvent) {
         Mode::Standby => dispatch_standby(app, syst, ev),
         Mode::AppMenu => dispatch_app_menu(app, syst, ev),
         Mode::Settings => dispatch_settings(app, syst, ev),
-        Mode::ChanMgr => chanmgr::dispatch(app, ev),
         Mode::Scan => scan::dispatch(app, syst, ev),
         Mode::Search => search::dispatch(app, syst, ev),
         Mode::ScanQt => scanqt::dispatch(app, syst, ev),
-        Mode::Fm => fm::dispatch(app, syst, ev),
+        Mode::External(_) => super::overlay::dispatch_key(app, syst, ev),
     }
 }
 
@@ -197,7 +194,7 @@ fn dispatch_app_menu(app: &mut App, syst: &mut SYST, ev: KeyEvent) {
         KeyEventKind::Single | KeyEventKind::Repeat => match ev.key {
             KeyId::Up | KeyId::Down => {
                 let up = ev.key == KeyId::Up;
-                let len = LAUNCHER_ITEMS.len();
+                let len = launcher::total_item_count();
                 app.launcher_index = if up {
                     (app.launcher_index + len - 1) % len
                 } else {
@@ -205,16 +202,20 @@ fn dispatch_app_menu(app: &mut App, syst: &mut SYST, ev: KeyEvent) {
                 };
             }
             KeyId::Menu if ev.kind == KeyEventKind::Single => {
-                let entry = LAUNCHER_ITEMS[app.launcher_index];
-                if entry.is_available() {
-                    match entry {
-                        LauncherEntry::Settings => settings_ops::enter(app),
-                        LauncherEntry::ChannelMgr => chanmgr::enter(app),
-                        LauncherEntry::ScanQt => scanqt::enter(app, syst),
-                        LauncherEntry::FmRadio => fm::enter(app, syst),
-                        LauncherEntry::Search => search::enter(app, syst),
+                let index = app.launcher_index;
+                if launcher::is_available_at(app, index) {
+                    if index < STATIC_ITEMS.len() {
+                        let entry = STATIC_ITEMS[index];
+                        match entry {
+                            LauncherEntry::Settings => settings_ops::enter(app),
+                            LauncherEntry::ScanQt => scanqt::enter(app, syst),
+                            LauncherEntry::Search => search::enter(app, syst),
+                        }
+                        debug_assert!(app.mode == entry.target_mode());
+                    } else {
+                        let slot = (index - STATIC_ITEMS.len()) as u8;
+                        super::overlay::enter(app, syst, slot);
                     }
-                    debug_assert!(app.mode == entry.target_mode());
                 }
             }
             KeyId::Exit if ev.kind == KeyEventKind::Single => {

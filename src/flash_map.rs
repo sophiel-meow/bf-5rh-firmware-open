@@ -49,6 +49,18 @@ pub mod addr {
     pub const RMW_SCRATCH_ADDR: u32 = 0xD000;
 
     pub const SYSTEMRAN_ADDR: u32 = 0xE000;
+
+    /// external app overlay: 720KB total
+    /// after voice prompt
+    pub const OVERLAY_APP_ADDR: u32 = 0x14C000;
+
+    /// 16KB each app (8KB per elf)
+    pub const OVERLAY_SLOT_SIZE: u32 = 16 * 1024;
+    pub const OVERLAY_SLOT_COUNT: u8 = 4;
+
+    pub const fn overlay_slot_addr(slot: u8) -> u32 {
+        OVERLAY_APP_ADDR + slot as u32 * OVERLAY_SLOT_SIZE
+    }
 }
 
 pub const FIRST_BOOT_MAGIC: [u8; 4] = *b"AURA";

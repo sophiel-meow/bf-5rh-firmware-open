@@ -1,3 +1,6 @@
+[workspace]
+members = ["abi"]
+
 [package]
 name = "bf5rh-fw"
 version = "0.1.0"
@@ -8,12 +11,17 @@ name = "bf5rh-fw"
 test = false
 bench = false
 
+[features]
+default = ["search"]
+search = []
+
 [dependencies]
 cortex-m = "0.7"
 cortex-m-rt = { version = "0.7", features = ["device"] }
 panic-halt = "0.2"
 at32f421-pac = { path = "at32f421-pac", features = ["rt"] }
 embedded-graphics = "0.8"
+bf5rh-abi = { path = "abi" }
 
 [profile.release]
 opt-level = "z"

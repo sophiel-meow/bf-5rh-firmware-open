@@ -7,6 +7,7 @@ name = "at32f421-pac"
 version = "0.1.0"
 dependencies = [
  "cortex-m",
+ "critical-section",
  "vcell",
 ]
 
@@ -32,10 +33,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bf5rh-abi"
+version = "0.1.0"
+
+[[package]]
 name = "bf5rh-fw"
 version = "0.1.0"
 dependencies = [
  "at32f421-pac",
+ "bf5rh-abi",
  "cortex-m",
  "cortex-m-rt",
  "embedded-graphics",

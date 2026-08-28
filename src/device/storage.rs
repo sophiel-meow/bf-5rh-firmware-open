@@ -129,6 +129,9 @@ impl<'a> Storage<'a> {
     }
 
     pub fn save_fm_channels(&mut self, channels: &[u16; flash_map::FM_CHANNEL_COUNT]) {
+        if FM_REGION.load(&mut self.norflash).is_none() {
+            self.norflash.erase_sector(addr::FM_ADDR);
+        }
         let mut buf = [0u8; FM_PAYLOAD_LEN];
         for (pair, &v) in buf.chunks_exact_mut(2).zip(channels.iter()) {
             pair.copy_from_slice(&v.to_le_bytes());
@@ -228,6 +231,7 @@ impl<'a> Storage<'a> {
         self.norflash.erase_sector(addr::VFO_INFO_ADDR);
         self.norflash.erase_sector(addr::RADIO_IMFOS_ADDR);
         self.norflash.erase_sector(addr::SYSTEMRAN_ADDR);
+        self.norflash.erase_sector(addr::FM_ADDR);
     }
 
     /// True once `first_boot_format` has run on this device.

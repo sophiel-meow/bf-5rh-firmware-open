@@ -8,6 +8,7 @@ mod drivers;
 mod flash_map;
 mod hal;
 mod ui;
+mod upload;
 
 use at32f421_pac as pac;
 use core::fmt::Write;
@@ -226,6 +227,10 @@ fn main() -> ! {
             .set_bit()
     });
 
+    if board::menu_exit_held(&dp.gpiob, &mut cp.SYST) {
+        upload::run(&dp.gpioa, &dp.spi1, &dp.usart1);
+    }
+
     let mut serial = Serial { usart1: dp.usart1 };
     dbg_println!(serial, "\r\nbf5rh-fw: FD6818B/BK4829");
     dbg_println!(
@@ -338,11 +343,9 @@ fn main() -> ! {
             app.poll_auto_lock(&mut cp.SYST, rx_active);
             app.poll_backlight();
             app.poll_blink();
-            app.poll_chanmgr_name_timeout();
             app.poll_scan(&mut cp.SYST);
             app.poll_search(&mut cp.SYST);
             app.poll_scanqt(&mut cp.SYST);
-            app.poll_fm(&mut cp.SYST);
 
             if !app.power_save_active() {
                 let mic = app.radio_mut().read_mic_level(&mut cp.SYST);
@@ -350,6 +353,10 @@ fn main() -> ! {
                 app.poll_vox(&mut cp.SYST, mic, rx_active);
             }
             app.poll_battery();
+
+            if matches!(app.mode(), app::Mode::External(_)) {
+                app::overlay::tick(&mut app, &mut cp.SYST, 100);
+            }
 
             board::set_rx_led(&dp.gpioa, rx_active && !app.is_transmitting());
             board::set_tx_led(&dp.gpioa, app.is_transmitting());
@@ -361,7 +368,7 @@ fn main() -> ! {
                 let rssi = app.radio_mut().rssi(&mut cp.SYST);
                 app.set_rssi_raw(rssi as u8);
             }
-            ui::draw(&mut display, &mut app, &mut ui_state);
+            ui::draw(&mut display, &mut app, &mut ui_state, &mut cp.SYST);
         }
 
         fast_tick = fast_tick.wrapping_add(1);

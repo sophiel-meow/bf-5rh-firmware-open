@@ -1,0 +1,21 @@
+[workspace]
+
+[package]
+name = "fm"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fm"
+test = false
+bench = false
+
+[dependencies]
+bf5rh-abi = { path = "../../abi" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = true
+panic = "abort"

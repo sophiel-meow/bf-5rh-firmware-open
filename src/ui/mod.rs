@@ -1,5 +1,3 @@
-mod chanmgr;
-mod fm;
 mod icons;
 mod launcher;
 mod list;
@@ -9,9 +7,12 @@ mod search;
 mod settings;
 mod standby;
 
+pub(crate) use list::{draw_list, Cache, ListSource};
+
 use crate::app;
 use crate::device::display::Display;
 use crate::device::radio::SubAudio;
+use cortex_m::peripheral::SYST;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
@@ -80,7 +81,6 @@ pub struct UiState {
     scan: scan::Cache,
     scanqt: scanqt::Cache,
     search: search::Cache,
-    fm: fm::Cache,
 }
 
 impl UiState {
@@ -92,12 +92,40 @@ impl UiState {
             scan: scan::Cache::new(),
             scanqt: scanqt::Cache::new(),
             search: search::Cache::new(),
-            fm: fm::Cache::new(),
         }
     }
 }
 
-pub fn draw(display: &mut Display<'_>, app: &mut app::App<'_>, state: &mut UiState) {
+#[allow(dead_code)]
+fn draw_stack_probe<D>(lcd: &mut D)
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    use core::fmt::Write;
+    use embedded_graphics::mono_font::{ascii::FONT_6X10, MonoTextStyle};
+    use embedded_graphics::text::Text;
+
+    let (used, free) = crate::hal::stackprobe::high_water();
+    let mut t: TextBuf<16> = TextBuf::new();
+    let _ = write!(t, "U{used} F{free}");
+
+    let y = SCREEN_H - 10;
+    clear_strip(lcd, y, 10);
+    Text::new(
+        t.as_str(),
+        Point::new(1, y + 8),
+        MonoTextStyle::new(&FONT_6X10, Rgb565::new(31, 63, 0)),
+    )
+    .draw(lcd)
+    .ok();
+}
+
+pub fn draw(
+    display: &mut Display<'_>,
+    app: &mut app::App<'_>,
+    state: &mut UiState,
+    syst: &mut SYST,
+) {
     let lcd = display.as_draw_target();
     let mode = app.mode();
     if state.last_mode != Some(mode) {
@@ -106,17 +134,15 @@ pub fn draw(display: &mut Display<'_>, app: &mut app::App<'_>, state: &mut UiSta
         state.scan = scan::Cache::new();
         state.scanqt = scanqt::Cache::new();
         state.search = search::Cache::new();
-        state.fm = fm::Cache::new();
     }
     state.last_mode = Some(mode);
     match mode {
         app::Mode::AppMenu => launcher::draw_app_menu(lcd, app, &mut state.list),
         app::Mode::Settings => settings::draw_settings(lcd, app, &mut state.list),
-        app::Mode::ChanMgr => chanmgr::draw_chanmgr(lcd, app, &mut state.list),
         app::Mode::Scan => scan::draw_scan(lcd, app, &mut state.scan),
         app::Mode::Search => search::draw_search(lcd, app, &mut state.search),
         app::Mode::ScanQt => scanqt::draw_scanqt(lcd, app, &mut state.scanqt),
-        app::Mode::Fm => fm::draw_fm(lcd, app, &mut state.fm, &mut state.list),
+        app::Mode::External(_) => app::overlay::draw(lcd, app, syst),
         _ => standby::draw_standby(lcd, app, &mut state.standby),
     };
 }

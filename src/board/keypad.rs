@@ -1,4 +1,5 @@
 use at32f421_pac as pac;
+use cortex_m::peripheral::SYST;
 
 const COL_MASK: u32 = 0x0F00; // PB8-11
 const ROW_MASK: u32 = 0x0078; // PB3-6
@@ -61,6 +62,19 @@ pub fn read_keypad_column(gpiob: &pac::Gpiob) -> Option<u8> {
     } else {
         Some((rows_low >> 3).trailing_zeros() as u8)
     }
+}
+
+// MENU+EXIT on boot to enter app-upload mode
+pub fn menu_exit_held(gpiob: &pac::Gpiob, syst: &mut SYST) -> bool {
+    const SETTLE_US: u32 = 5;
+    const MENU_BIT: u32 = 1 << 5; // PB5，col 2
+    const EXIT_BIT: u32 = 1 << 6; // PB6，col 3
+
+    set_keypad_row(gpiob, 4);
+    crate::hal::delay::us(syst, SETTLE_US);
+    let rows_low = !gpiob.idt().read().bits() & ROW_MASK;
+    set_keypad_rows_idle(gpiob);
+    (rows_low & MENU_BIT != 0) && (rows_low & EXIT_BIT != 0)
 }
 
 pub fn init_side_key2_pin(gpioa: &pac::Gpioa) {

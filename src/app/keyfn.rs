@@ -1,6 +1,7 @@
-use super::{fm, scan, search, App};
+use super::{scan, search, App};
 use cortex_m::peripheral::SYST;
 
+// TODO: FM radio was made as app, add key function to app
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum KeyFunction {
     None,
@@ -8,7 +9,6 @@ pub enum KeyFunction {
     Monitor,
     Mode,
     TxTone,
-    FmRadio,
     Scan,
     Power,
     Flashlight,
@@ -24,7 +24,6 @@ impl KeyFunction {
             KeyFunction::Monitor => "MONITOR",
             KeyFunction::Mode => "MODE",
             KeyFunction::TxTone => "TX TONE",
-            KeyFunction::FmRadio => "FM RADIO",
             KeyFunction::Scan => "SCAN",
             KeyFunction::Power => "POWER",
             KeyFunction::Flashlight => "LIGHT",
@@ -40,7 +39,7 @@ pub(super) fn from_u8(v: u8) -> KeyFunction {
         2 => KeyFunction::Monitor,
         3 => KeyFunction::Mode,
         4 => KeyFunction::TxTone,
-        5 => KeyFunction::FmRadio,
+        // 5=> fm radio
         6 => KeyFunction::Scan,
         7 => KeyFunction::Power,
         8 => KeyFunction::Flashlight,
@@ -56,7 +55,7 @@ pub(super) fn invoke(app: &mut App, syst: &mut SYST, func: KeyFunction) {
         KeyFunction::WideNarrow => app.toggle_wide_narrow(syst),
         KeyFunction::Monitor => app.radio.toggle_monitor(),
         KeyFunction::Mode => app.toggle_modulation(syst),
-        KeyFunction::FmRadio => fm::enter(app, syst),
+        // TODO: fm radio
         KeyFunction::Scan => scan::enter(app, syst),
         KeyFunction::Power => app.toggle_power(syst),
         KeyFunction::Flashlight => app.flashlight.toggle(),

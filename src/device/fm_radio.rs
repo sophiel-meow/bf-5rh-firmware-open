@@ -1,17 +1,14 @@
-use crate::drivers::rda5807::Rda5807;
 use at32f421_pac as pac;
 use cortex_m::peripheral::SYST;
 
-pub use crate::drivers::rda5807::{FREQ_HI_KHZ, FREQ_LO_KHZ};
-
 pub struct FmRadio<'a> {
-    chip: Rda5807<'a>,
+    chip: crate::drivers::rda5807::Rda5807<'a>,
 }
 
 impl<'a> FmRadio<'a> {
     pub fn new(gpioa: &'a pac::Gpioa, gpioc: &'a pac::Gpioc) -> Self {
         FmRadio {
-            chip: Rda5807::new(gpioa, gpioc),
+            chip: crate::drivers::rda5807::Rda5807::new(gpioa, gpioc),
         }
     }
 

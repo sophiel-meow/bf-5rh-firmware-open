@@ -1,11 +1,10 @@
-mod chanmgr;
 mod convert;
-mod fm;
 mod input;
 mod keyfn;
 mod keys;
 mod launcher;
 pub(crate) mod name_edit;
+pub(crate) mod overlay;
 mod scan;
 mod scanqt;
 mod search;
@@ -77,11 +76,11 @@ pub enum Mode {
     Standby,
     AppMenu,
     Settings,
-    ChanMgr,
-    Fm,
     Scan,
     Search,
     ScanQt,
+    /// running external app from spi flash
+    External(u8),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -116,7 +115,6 @@ pub struct App<'a> {
     sides: [side::Side; 2],
     settings: flash_map::Settings,
     settings_ui: settings::SettingsUi,
-    chanmgr: chanmgr::ChanMgrUi,
     launcher_index: usize,
 
     master: usize,
@@ -172,9 +170,9 @@ pub struct App<'a> {
     search: search::SearchState,
     scanqt: scanqt::ScanQtState,
 
-    fm: fm::FmState,
+    /// fm radio chip drvier
+    /// keep for overlay::api_fm_*
     fm_radio: FmRadio<'a>,
-    fm_channels: [u16; flash_map::FM_CHANNEL_COUNT],
 }
 
 impl<'a> App<'a> {
@@ -194,9 +192,6 @@ impl<'a> App<'a> {
             .load_settings()
             .unwrap_or(flash_map::Settings::DEFAULT);
         let battery_cal = storage.read_battery_calibration();
-        let fm_channels = storage
-            .load_fm_channels()
-            .unwrap_or([flash_map::FM_CHANNEL_EMPTY; flash_map::FM_CHANNEL_COUNT]);
 
         let mut sides = [
             side::Side {
@@ -298,7 +293,6 @@ impl<'a> App<'a> {
             sides,
             settings,
             settings_ui: settings::SettingsUi::new(),
-            chanmgr: chanmgr::ChanMgrUi::new(),
             launcher_index: 0,
             master: 0,
             watching: 0,
@@ -336,9 +330,7 @@ impl<'a> App<'a> {
             scan: scan::ScanState::new(),
             search: search::SearchState::new(),
             scanqt: scanqt::ScanQtState::new(),
-            fm: fm::FmState::new(),
             fm_radio,
-            fm_channels,
         }
     }
 
@@ -727,10 +719,6 @@ impl<'a> App<'a> {
         self.blink_phase = self.blink_phase.wrapping_add(1);
     }
 
-    pub fn poll_chanmgr_name_timeout(&mut self) {
-        chanmgr::poll_name_timeout(self);
-    }
-
     pub fn rx_blink_on(&self) -> bool {
         (self.blink_phase / RX_BLINK_HALF_PERIOD).is_multiple_of(2)
     }
@@ -748,15 +736,15 @@ impl<'a> App<'a> {
     }
 
     pub fn launcher_item_count(&self) -> usize {
-        launcher::LAUNCHER_ITEMS.len()
+        launcher::total_item_count()
     }
 
-    pub fn launcher_label_at(&self, index: usize) -> &'static str {
-        launcher::LAUNCHER_ITEMS[index].label()
+    pub fn launcher_label_at(&mut self, index: usize, w: &mut dyn core::fmt::Write) {
+        launcher::label_at(self, index, w);
     }
 
-    pub fn launcher_available_at(&self, index: usize) -> bool {
-        launcher::LAUNCHER_ITEMS[index].is_available()
+    pub fn launcher_available_at(&mut self, index: usize) -> bool {
+        launcher::is_available_at(self, index)
     }
 
     // settings UI
@@ -823,44 +811,6 @@ impl<'a> App<'a> {
         None
     }
 
-    // channel manager UI
-    pub fn chanmgr_is_detail(&self) -> bool {
-        chanmgr::is_detail(self)
-    }
-    pub fn chanmgr_list_row_count(&self) -> usize {
-        chanmgr::list_row_count(self)
-    }
-    pub fn chanmgr_list_selected_index(&self) -> usize {
-        chanmgr::list_selected_index(self)
-    }
-    /// Reads flash for the currently-visible rows' channel names, so this
-    /// needs `&mut self`.
-    pub fn chanmgr_list_label(&mut self, index: usize, w: &mut dyn core::fmt::Write) {
-        chanmgr::list_label(self, index, w)
-    }
-    pub fn chanmgr_field_count(&self) -> usize {
-        chanmgr::detail_field_count(self)
-    }
-    pub fn chanmgr_field_index(&self) -> usize {
-        chanmgr::detail_field_index(self)
-    }
-    /// Whether to draw the up/down arrow chrome: true only for a field that
-    /// actually cycles via `Up`/`Down`, false for the text-entry fields
-    pub fn chanmgr_show_arrows(&self) -> bool {
-        chanmgr::detail_show_arrows(self)
-    }
-    pub fn chanmgr_field_label(&self, index: usize, w: &mut dyn core::fmt::Write) {
-        chanmgr::detail_label(self, index, w)
-    }
-    pub fn chanmgr_field_value(&self, index: usize, w: &mut dyn core::fmt::Write) -> bool {
-        chanmgr::detail_value(self, index, w)
-    }
-    pub fn chanmgr_field_cursor(&self, index: usize) -> Option<usize> {
-        chanmgr::detail_cursor(self, index)
-    }
-    pub fn chanmgr_detail_title(&self, w: &mut dyn core::fmt::Write) {
-        chanmgr::detail_title(self, w)
-    }
     // PTT
     pub fn set_ptt(&mut self, syst: &mut SYST, pressed: bool) {
         tx::set_ptt(self, syst, pressed);
@@ -956,6 +906,9 @@ impl<'a> App<'a> {
     pub fn storage_mut(&mut self) -> &mut Storage<'a> {
         &mut self.storage
     }
+    pub fn fm_radio_mut(&mut self) -> &mut FmRadio<'a> {
+        &mut self.fm_radio
+    }
     pub fn poll_squelch(&mut self, syst: &mut SYST, db: u8) {
         self.radio.poll_squelch(syst, db);
     }
@@ -992,36 +945,6 @@ impl<'a> App<'a> {
     }
     pub fn scanqt_tone(&self) -> Option<SubAudio> {
         scanqt::tone(self)
-    }
-    pub fn poll_fm(&mut self, syst: &mut SYST) {
-        fm::poll(self, syst);
-    }
-    pub fn fm_deci_mhz(&self) -> u16 {
-        fm::deci_mhz(self)
-    }
-    pub fn fm_is_channel_mode(&self) -> bool {
-        fm::is_channel_mode(self)
-    }
-    pub fn fm_channel_index(&self) -> u8 {
-        fm::channel_index(self)
-    }
-    pub fn fm_is_seeking(&self) -> bool {
-        fm::is_seeking(self)
-    }
-    pub fn fm_rssi(&self) -> u8 {
-        fm::rssi(self)
-    }
-    pub fn fm_save_picker_selected(&self) -> Option<u8> {
-        fm::save_picker_selected(self)
-    }
-    pub fn fm_channel_freq_at(&self, index: usize) -> Option<u16> {
-        fm::channel_freq_at(self, index)
-    }
-    pub fn fm_input_len(&self) -> usize {
-        fm::input_len(self)
-    }
-    pub fn fm_input_digit(&self, idx: usize) -> u8 {
-        fm::input_digit(self, idx)
     }
     pub fn rssi_open(&self) -> bool {
         self.radio.rssi_open()

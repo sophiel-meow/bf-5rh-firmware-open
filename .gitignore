@@ -2,5 +2,7 @@
 /at32f421-pac/target
 *.bin
 *.BF
+*.app
+/apps/*/target
 /tools/__pycache__
 
