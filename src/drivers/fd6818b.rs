@@ -121,7 +121,8 @@ const SQL_TH_IN: [u8; 10] = [0, 89, 91, 93, 95, 97, 99, 102, 105, 107];
 /// lower than SQL_TH_IN for closing to prevent chattering
 const SQL_TH_OUT: [u8; 10] = [0, 87, 89, 91, 93, 95, 97, 99, 102, 105];
 
-const SQL_OFFSET_U_400: [u8; 16] = [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 0, 0, 0];
+const SQL_OFFSET_U_400: [u8; 16] =
+    [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 0, 0, 0];
 const SQL_OFFSET_V_136: [u8; 10] = [4, 4, 4, 4, 4, 4, 4, 4, 2, 2];
 const SQL_OFFSET_V_200: [u8; 16] = [0; 16];
 
@@ -227,8 +228,8 @@ pub enum Power {
 /// 4 bits of each write and the coefficient itself into the low 12 bits.
 const REG_DTMF_COEF: u8 = 0x09;
 const DTMF_COEF_TABLE: [u16; 16] = [
-    0x006F, 0x106B, 0x2067, 0x3062, 0x4050, 0x5047, 0x603A, 0x702C, 0x8041, 0x9037, 0xA025, 0xB017,
-    0xC0E4, 0xD0CB, 0xE0B5, 0xF09F,
+    0x006F, 0x106B, 0x2067, 0x3062, 0x4050, 0x5047, 0x603A, 0x702C, 0x8041,
+    0x9037, 0xA025, 0xB017, 0xC0E4, 0xD0CB, 0xE0B5, 0xF09F,
 ];
 
 /// REG 0x72: FSK baud-rate select while in FSK work mode, or the DTMF
@@ -311,8 +312,8 @@ const REG_MDC_SYNC_HI: u8 = 0x5A;
 const REG_MDC_SYNC_MID: u8 = 0x5B;
 const MDC_SYNC: [u8; 5] = [0xFB, 0x72, 0x40, 0x99, 0xA7];
 const MDC_TXDATA: [u16; MDC_LEN] = [
-    0xB604, 0x37D9, 0x8388, 0xE28E, 0x66EC, 0xAEE4, 0xC3DB, 0x158F, 0x19A7, 0x499F, 0x82D4, 0xFAE5,
-    0x1A96, 0xC9C0,
+    0xB604, 0x37D9, 0x8388, 0xE28E, 0x66EC, 0xAEE4, 0xC3DB, 0x158F, 0x19A7,
+    0x499F, 0x82D4, 0xFAE5, 0x1A96, 0xC9C0,
 ];
 
 const REG_AF_TX_3K: u8 = 0x74;
@@ -321,6 +322,25 @@ const REG_AF_TX_300_D2: u8 = 0x45;
 const REG_AF_RX_3K: u8 = 0x75;
 const REG_AF_RX_300_D1: u8 = 0x54;
 const REG_AF_RX_300_D2: u8 = 0x55;
+
+/// REG 0x2B: AF filter enables. RX path lives in the high bits, TX path in
+/// the low bits; every bit is "1 = disable that filter":
+///
+/// | bit | filter                  |
+/// |-----|-------------------------|
+/// | 10  | AF Rx 300 Hz high-pass  |
+/// |  9  | AF Rx 3 kHz low-pass    |
+/// |  8  | AF Rx de-emphasis       |
+/// |  2  | AF Tx 300 Hz high-pass  |
+/// |  1  | AF Tx LPF1              |
+/// |  0  | AF Tx pre-emphasis      |
+const REG_AF_FILTER: u8 = 0x2B;
+
+/// 0x0000 = stock (all filters + de-emphasis on)
+/// 0x0300 = disable Rx de-emphasis + Rx 3kHz LPF
+/// 0x0500 = disable Rx de-emphasis + Rx 300Hz HPF
+/// 0x0400 = disable Rx 300Hz HPF only
+const AF_FILTER_RX_VALUE: u16 = 0x0300;
 
 /// REG 0x47: audio-out routing. Base value 0x6040 ORed with one of the
 /// state bitfields below -- confirmed against the *stock* K6/5RH firmware's
@@ -606,7 +626,12 @@ impl<'a> Fd6818<'a> {
     /// transmitter left alone (the UI key-beep); `key_tx = true` also keys the
     /// transmitter so the tone actually goes out over RF (the repeater-access
     /// tone and roger beep).
-    pub fn tx_single_tone_on(&mut self, syst: &mut SYST, hz_div_10: u16, key_tx: bool) {
+    pub fn tx_single_tone_on(
+        &mut self,
+        syst: &mut SYST,
+        hz_div_10: u16,
+        key_tx: bool,
+    ) {
         let gain = self.read_reg(syst, REG_TONE_GAIN);
         self.write_reg(
             syst,
@@ -633,7 +658,11 @@ impl<'a> Fd6818<'a> {
     }
 
     /// Stops the tone and falls back to plain RX or TX
-    pub fn tx_single_tone_off(&mut self, syst: &mut SYST, was_transmitting: bool) {
+    pub fn tx_single_tone_off(
+        &mut self,
+        syst: &mut SYST,
+        was_transmitting: bool,
+    ) {
         self.write_reg(syst, REG_TONE_FREQ, 0);
         self.write_reg(syst, REG_TONE_GAIN, 0x0000);
         self.tone_active = false;
@@ -832,7 +861,11 @@ impl<'a> Fd6818<'a> {
             REG_FSK_CONTROL,
             FSK_CONTROL_BASE | FSK_CONTROL_RX_FIFO_CLEAR,
         );
-        self.write_reg(syst, REG_FSK_CONTROL, FSK_CONTROL_BASE | FSK_CONTROL_RX_EN);
+        self.write_reg(
+            syst,
+            REG_FSK_CONTROL,
+            FSK_CONTROL_BASE | FSK_CONTROL_RX_EN,
+        );
         self.write_reg(syst, REG_WORK_MODE, WORK_MODE_FSK_RX);
     }
 
@@ -846,7 +879,11 @@ impl<'a> Fd6818<'a> {
     /// modem's FIFO and blocks until the chip reports it sent (or ~1s
     /// elapses without an ack)
     #[allow(dead_code)]
-    pub fn fsk_transmit(&mut self, syst: &mut SYST, data: &[u16; FSK_FRAME_LEN]) {
+    pub fn fsk_transmit(
+        &mut self,
+        syst: &mut SYST,
+        data: &[u16; FSK_FRAME_LEN],
+    ) {
         self.write_reg(syst, REG_WORK_MODE, WORK_MODE_FSK_TX_IRQ);
         self.write_reg(
             syst,
@@ -857,7 +894,11 @@ impl<'a> Fd6818<'a> {
         for &word in data.iter() {
             self.write_reg(syst, REG_FSK_FIFO, word);
         }
-        self.write_reg(syst, REG_FSK_CONTROL, FSK_CONTROL_BASE | FSK_CONTROL_TX_EN);
+        self.write_reg(
+            syst,
+            REG_FSK_CONTROL,
+            FSK_CONTROL_BASE | FSK_CONTROL_TX_EN,
+        );
         for _ in 0..200 {
             delay::ms(syst, 5);
             if self.read_reg(syst, REG_STATUS) & 0x0001 != 0 {
@@ -896,7 +937,11 @@ impl<'a> Fd6818<'a> {
             REG_FSK_CONTROL,
             FSK_CONTROL_BASE | FSK_CONTROL_RX_FIFO_CLEAR,
         );
-        self.write_reg(syst, REG_FSK_CONTROL, FSK_CONTROL_BASE | FSK_CONTROL_RX_EN);
+        self.write_reg(
+            syst,
+            REG_FSK_CONTROL,
+            FSK_CONTROL_BASE | FSK_CONTROL_RX_EN,
+        );
         self.write_reg(syst, REG_WORK_MODE, WORK_MODE_MDC_ARM);
     }
 
@@ -928,7 +973,11 @@ impl<'a> Fd6818<'a> {
         }
         delay::ms(syst, 20);
 
-        self.write_reg(syst, REG_FSK_CONTROL, FSK_CONTROL_BASE | FSK_CONTROL_TX_EN);
+        self.write_reg(
+            syst,
+            REG_FSK_CONTROL,
+            FSK_CONTROL_BASE | FSK_CONTROL_TX_EN,
+        );
         for _ in 0..200 {
             delay::ms(syst, 5);
             if self.read_reg(syst, REG_STATUS) & 0x0001 != 0 {
@@ -981,7 +1030,11 @@ impl<'a> Fd6818<'a> {
         self.write_reg(syst, REG_VOLUME, vol_reg);
     }
 
-    pub fn apply_modulation(&mut self, syst: &mut SYST, modulation: Modulation) {
+    pub fn apply_modulation(
+        &mut self,
+        syst: &mut SYST,
+        modulation: Modulation,
+    ) {
         let if_sel = if matches!(modulation, Modulation::Usb | Modulation::Cw) {
             IF_SEL_ZERO
         } else {
@@ -990,11 +1043,12 @@ impl<'a> Fd6818<'a> {
         self.write_reg(syst, REG_IF_SEL, if_sel);
 
         let afc_disable = self.read_reg(syst, REG_AFC_DISABLE);
-        let afc_disable = if !matches!(modulation, Modulation::Fm | Modulation::Cwf) {
-            afc_disable | AFC_DISABLE_BIT
-        } else {
-            afc_disable & !AFC_DISABLE_BIT
-        };
+        let afc_disable =
+            if !matches!(modulation, Modulation::Fm | Modulation::Cwf) {
+                afc_disable | AFC_DISABLE_BIT
+            } else {
+                afc_disable & !AFC_DISABLE_BIT
+            };
         self.write_reg(syst, REG_AFC_DISABLE, afc_disable);
 
         let (agc5, agc6) = if modulation == Modulation::Am {
@@ -1031,7 +1085,11 @@ impl<'a> Fd6818<'a> {
                 self.write_reg(syst, REG_SUBAUDIO_FREQ, word & 0x1FFF);
 
                 self.write_reg(syst, REG_SUBAUDIO_FREQ, SUBAUDIO_TAIL_WORD);
-                self.write_reg(syst, REG_SUBAUDIO_THRESH, SUBAUDIO_THRESH_VALUE);
+                self.write_reg(
+                    syst,
+                    REG_SUBAUDIO_THRESH,
+                    SUBAUDIO_THRESH_VALUE,
+                );
             }
             SubAudio::Dcs { code, inverted } => {
                 let gain = (self.dcs_mod_depth & 0x7F) as u16;
@@ -1078,7 +1136,11 @@ impl<'a> Fd6818<'a> {
                 let primary_word = Self::subaudio_reg_word(primary_tenths_hz);
                 self.write_reg(syst, REG_SUBAUDIO_FREQ, primary_word & 0x1FFF);
                 self.write_reg(syst, REG_SUBAUDIO_FREQ, SUBAUDIO_TAIL_WORD);
-                self.write_reg(syst, REG_SUBAUDIO_THRESH, SUBAUDIO_THRESH_VALUE);
+                self.write_reg(
+                    syst,
+                    REG_SUBAUDIO_THRESH,
+                    SUBAUDIO_THRESH_VALUE,
+                );
             }
         }
     }
@@ -1135,7 +1197,8 @@ impl<'a> Fd6818<'a> {
         let dcs_hi = self.read_reg(syst, REG_DCS_HI);
         if dcs_hi & 0x8000 == 0 {
             let dcs_lo = self.read_reg(syst, REG_DCS_LO);
-            let raw = (((dcs_hi & 0x0FFF) as u32) << 12) | (dcs_lo & 0x0FFF) as u32;
+            let raw =
+                (((dcs_hi & 0x0FFF) as u32) << 12) | (dcs_lo & 0x0FFF) as u32;
             let bytes = [
                 (raw & 0xFF) as u8,
                 ((raw >> 4) & 0xFF) as u8,
@@ -1190,24 +1253,36 @@ impl<'a> Fd6818<'a> {
         None
     }
 
-    pub fn set_squelch_level(&mut self, syst: &mut SYST, freq_hz: u32, level: u8) {
+    pub fn set_squelch_level(
+        &mut self,
+        syst: &mut SYST,
+        freq_hz: u32,
+        level: u8,
+    ) {
         let level = (level as usize).min(SQL_TH_IN.len() - 1);
         let offset = Self::squelch_offset(freq_hz);
         let th_in = SQL_TH_IN[level].saturating_sub(offset);
         let th_out = SQL_TH_OUT[level].saturating_sub(offset);
-        self.write_reg(syst, REG_SQUELCH, ((th_in as u16) << 8) | th_out as u16);
+        self.write_reg(
+            syst,
+            REG_SQUELCH,
+            ((th_in as u16) << 8) | th_out as u16,
+        );
     }
 
     fn squelch_offset(freq_hz: u32) -> u8 {
         let mhz = freq_hz / 1_000_000;
         if freq_hz >= 400_000_000 {
-            let idx = (((mhz - 400) / 10) as usize).min(SQL_OFFSET_U_400.len() - 1);
+            let idx =
+                (((mhz - 400) / 10) as usize).min(SQL_OFFSET_U_400.len() - 1);
             SQL_OFFSET_U_400[idx]
         } else if freq_hz >= 200_000_000 {
-            let idx = (((mhz - 200) / 5) as usize).min(SQL_OFFSET_V_200.len() - 1);
+            let idx =
+                (((mhz - 200) / 5) as usize).min(SQL_OFFSET_V_200.len() - 1);
             SQL_OFFSET_V_200[idx]
         } else if freq_hz >= 130_000_000 {
-            let idx = (((mhz - 130) / 5) as usize).min(SQL_OFFSET_V_136.len() - 1);
+            let idx =
+                (((mhz - 130) / 5) as usize).min(SQL_OFFSET_V_136.len() - 1);
             SQL_OFFSET_V_136[idx]
         } else {
             0
@@ -1266,7 +1341,13 @@ impl<'a> Fd6818<'a> {
 
     /// `tx`=true for the transmit path, false for receive;
     /// `f3k`=true for the 3kHz corner, false for the 300Hz corner.
-    pub fn set_af_response(&mut self, syst: &mut SYST, tx: bool, f3k: bool, db: u8) {
+    pub fn set_af_response(
+        &mut self,
+        syst: &mut SYST,
+        tx: bool,
+        f3k: bool,
+        db: u8,
+    ) {
         let (d1, d2) = Self::af_response_coeffs(f3k, db);
         match (tx, f3k) {
             (true, true) => self.write_reg(syst, REG_AF_TX_3K, d1),
@@ -1478,6 +1559,7 @@ impl<'a> Fd6818<'a> {
         let prefix = self.state_on_prefix();
         self.write_reg(syst, REG_STATE, prefix);
         self.write_reg(syst, REG_STATE, STATE_RX_ON);
+        self.write_reg(syst, REG_AF_FILTER, AF_FILTER_RX_VALUE);
         self.select_band(syst);
     }
 
