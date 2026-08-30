@@ -22,7 +22,7 @@
         pkgs = import nixpkgs { inherit system overlays; };
 
         rust-toolchain = pkgs.rust-bin.stable.latest.default.override {
-          targets = [ "thumbv7em-none-eabihf" ];
+          targets = [ "thumbv7em-none-eabi" ];
           extensions = [ "llvm-tools" ];
         };
       in
