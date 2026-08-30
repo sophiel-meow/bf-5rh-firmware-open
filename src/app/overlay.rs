@@ -1,8 +1,8 @@
 use core::mem::MaybeUninit;
 
 use bf5rh_abi::{
-    Api, AppEntryFn, AppEvent, AppResult, ImageHeader, ListRow, ARENA_SIZE,
-    BUILD_HASH, MAGIC,
+    Api, AppEntryFn, AppEvent, AppResult, ListRow, PackageHeader, ARENA_MAX,
+    ARENA_SIZE, BUILD_HASH, HANDOFF_SIZE, MAGIC,
 };
 use cortex_m::peripheral::{SCB, SYST};
 use embedded_graphics::mono_font::ascii::{FONT_5X8, FONT_6X10, FONT_9X18};
@@ -24,8 +24,38 @@ use crate::ui::{draw_list as draw_list_widget, Cache, ListSource};
 
 pub(crate) const SLOT_COUNT: u8 = addr::OVERLAY_SLOT_COUNT;
 
+/// 8-byte alignment
+/// a segment's `.bss` starts wherever the arena does, and an app doing `f64`
+/// maths puts doubles there. A bare `[u8; N]` has alignment 1, so without this
+/// the arena would drift a byte at a time as the firmware's own `.bss` changes.
+#[repr(C, align(8))]
+struct Arena([u8; ARENA_SIZE]);
+
 #[link_section = ".uninit.OVERLAY_ARENA"]
-static mut ARENA: MaybeUninit<[u8; ARENA_SIZE]> = MaybeUninit::uninit();
+static mut ARENA: MaybeUninit<Arena> = MaybeUninit::uninit();
+
+unsafe extern "C" {
+    /// start of the stack region; the arena must end exactly here
+    static __sheap: u32;
+}
+
+/// Stack that must still be free below SP once an oversized segment has taken
+/// its extension. The loader's own callees (the NOR read) live in it, and so
+/// does the whole compute call the segment makes from `Enter`.
+const OVERSIZE_HEADROOM: usize = 1024;
+
+const CANARY: u32 = 0x5A43_414E;
+const CANARY_WORDS: usize = 4;
+
+/// Bytes an oversized segment took above [`ARENA_SIZE`]; 0 when the resident
+/// segment fits the plain arena.
+static mut ARENA_EXT: usize = 0;
+
+/// `Fault` codes the loader raises for itself; kept far from the line numbers
+/// an app passes to `app_fault`.
+const FAULT_OVERSIZE_RESIDENT: u32 = 0xE000_0001;
+const FAULT_OVERSIZE_CONTINUE: u32 = 0xE000_0002;
+const FAULT_STACK_CANARY: u32 = 0xE000_0003;
 
 static mut NEEDS_FULL_CLEAR: bool = false;
 
@@ -72,21 +102,86 @@ fn crc32(data: &[u8]) -> u32 {
 enum LoadError {
     BadMagic,
     BadHash,
+    BadSegment,
     TooBig,
     BadCrc,
+
+    /// oversized segment refused: SP was already too low, or the arena does
+    /// not actually butt up against the stack
+    NoStack,
 }
 
-fn peek_header(app: &mut App, slot: u8) -> ImageHeader {
-    let mut hdr_buf = [0u8; ImageHeader::SIZE];
+fn load_err_code(e: &LoadError) -> u8 {
+    match e {
+        LoadError::BadMagic => 1,
+        LoadError::BadHash => 2,
+        LoadError::BadSegment => 3,
+        LoadError::TooBig => 4,
+        LoadError::BadCrc => 5,
+        LoadError::NoStack => 6,
+    }
+}
+
+/// Last segment-load failure, shown by the launcher so a silent refusal is not
+/// mistaken for a hang. 0 = none.
+static mut LAST_LOAD_ERR: u8 = 0;
+
+pub(crate) fn take_load_err() -> u8 {
+    let v = unsafe { LAST_LOAD_ERR };
+    unsafe { LAST_LOAD_ERR = 0 };
+    v
+}
+
+fn arena_ptr() -> *mut u8 {
+    unsafe { (*core::ptr::addr_of_mut!(ARENA)).as_mut_ptr() as *mut u8 }
+}
+
+/// Compile-time proof that the arena can hold a `f64` at offset 0.
+const _: () = assert!(core::mem::align_of::<Arena>() >= 8);
+
+fn sp_now() -> usize {
+    let sp: usize;
+    unsafe {
+        core::arch::asm!(
+            "mov {}, sp",
+            out(reg) sp,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    sp
+}
+
+/// First word above an oversized segment's top, rounded up to 4.
+fn canary_at(ext: usize) -> *mut u32 {
+    let top = arena_ptr() as usize + ARENA_SIZE + ext;
+    ((top + 3) & !3) as *mut u32
+}
+
+fn write_canary(ext: usize) {
+    let p = canary_at(ext);
+    for i in 0..CANARY_WORDS {
+        unsafe { p.add(i).write_volatile(CANARY) };
+    }
+}
+
+fn canary_intact(ext: usize) -> bool {
+    let p = canary_at(ext);
+    (0..CANARY_WORDS).all(|i| unsafe { p.add(i).read_volatile() } == CANARY)
+}
+
+fn peek_header(app: &mut App, slot: u8) -> PackageHeader {
+    let mut hdr_buf = [0u8; PackageHeader::SIZE];
     app.storage_mut()
         .norflash
         .read_bytes(addr::overlay_slot_addr(slot), &mut hdr_buf);
-    ImageHeader::from_bytes(&hdr_buf)
+    PackageHeader::from_bytes(&hdr_buf)
 }
 
 pub(crate) fn slot_valid(app: &mut App, slot: u8) -> bool {
     let hdr = peek_header(app, slot);
-    hdr.magic == MAGIC && hdr.build_hash == BUILD_HASH
+    hdr.magic == MAGIC
+        && hdr.build_hash == BUILD_HASH
+        && hdr.segment(0).is_some()
 }
 
 pub(crate) fn slot_name(app: &mut App, slot: u8, w: &mut dyn core::fmt::Write) {
@@ -98,13 +193,16 @@ pub(crate) fn slot_name(app: &mut App, slot: u8, w: &mut dyn core::fmt::Write) {
     let _ = write!(w, "{}", hdr.name_str());
 }
 
-fn load(app: &mut App, slot: u8) -> Result<AppEntryFn, LoadError> {
+/// Load segment `seg` of the package in `slot` into the arena. Every segment
+/// links against the same arena address, so this overwrites whatever segment
+/// was resident.
+fn load_segment(
+    app: &mut App,
+    slot: u8,
+    seg: u8,
+) -> Result<AppEntryFn, LoadError> {
     let base = addr::overlay_slot_addr(slot);
-    let storage = app.storage_mut();
-
-    let mut hdr_buf = [0u8; ImageHeader::SIZE];
-    storage.norflash.read_bytes(base, &mut hdr_buf);
-    let hdr = ImageHeader::from_bytes(&hdr_buf);
+    let hdr = peek_header(app, slot);
 
     if hdr.magic != MAGIC {
         return Err(LoadError::BadMagic);
@@ -112,21 +210,44 @@ fn load(app: &mut App, slot: u8) -> Result<AppEntryFn, LoadError> {
     if hdr.build_hash != BUILD_HASH {
         return Err(LoadError::BadHash);
     }
-    let image_len = hdr.image_len as usize;
-    let bss_len = hdr.bss_len as usize;
-    if image_len.saturating_add(bss_len) > ARENA_SIZE {
+    let seg = *hdr.segment(seg).ok_or(LoadError::BadSegment)?;
+
+    let image_len = seg.image_len as usize;
+    let bss_len = seg.bss_len as usize;
+    let total = image_len.saturating_add(bss_len);
+    if total > ARENA_MAX
+        || seg.offset as u32 + seg.image_len > addr::OVERLAY_SLOT_SIZE
+    {
         return Err(LoadError::TooBig);
     }
 
-    let arena_ptr =
-        unsafe { (*core::ptr::addr_of_mut!(ARENA)).as_mut_ptr() as *mut u8 };
+    let arena_ptr = arena_ptr();
+    let ext = total.saturating_sub(ARENA_SIZE);
+
+    // The extension is the bottom of the stack, so admit it only after proving
+    // the stack is not there yet, and leave a canary to catch it if
+    // it comes down anyway. Refusing is the whole point: an oversized segment
+    // that is loaded without the room does not fail visibly, it randomly
+    // corrupts whatever frame it lands on.
+    unsafe { ARENA_EXT = 0 };
+    if ext > 0 {
+        if arena_ptr as usize + ARENA_SIZE != &raw const __sheap as usize {
+            return Err(LoadError::NoStack);
+        }
+        let guard = canary_at(ext) as usize + CANARY_WORDS * 4;
+        if sp_now() < guard + OVERSIZE_HEADROOM {
+            return Err(LoadError::NoStack);
+        }
+        write_canary(ext);
+    }
+
     let image =
         unsafe { core::slice::from_raw_parts_mut(arena_ptr, image_len) };
-    storage
+    app.storage_mut()
         .norflash
-        .read_bytes(base + ImageHeader::SIZE as u32, image);
+        .read_bytes(base + seg.offset, image);
 
-    if crc32(image) != hdr.crc32 {
+    if crc32(image) != seg.crc32 {
         return Err(LoadError::BadCrc);
     }
 
@@ -134,11 +255,20 @@ fn load(app: &mut App, slot: u8) -> Result<AppEntryFn, LoadError> {
         unsafe { core::ptr::write_bytes(arena_ptr.add(image_len), 0, bss_len) };
     }
 
+    // The NOR read and the bss clear both ran with the stack right above the
+    // extension, so check before trusting it.
+    if ext > 0 {
+        if !canary_intact(ext) {
+            return Err(LoadError::NoStack);
+        }
+        unsafe { ARENA_EXT = ext };
+    }
+
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
 
     // Thumb function pointer LSB must set 1。
-    let entry_addr = (arena_ptr as u32 + hdr.entry_off) | 1;
+    let entry_addr = (arena_ptr as u32 + seg.entry_off) | 1;
     let entry: AppEntryFn = unsafe {
         core::mem::transmute::<*const (), AppEntryFn>(entry_addr as *const ())
     };
@@ -155,6 +285,12 @@ fn call(
         Some(e) => e,
         None => return AppResult::Fault(0),
     };
+    // An oversized segment aliases the stack, so the main loop must never run
+    // while it is resident. `enter_call` enforces that it chains straight out
+    // of `Enter`; this is the backstop if it somehow did not.
+    if unsafe { ARENA_EXT } > 0 && !matches!(ev, AppEvent::Enter) {
+        return AppResult::Fault(FAULT_OVERSIZE_RESIDENT);
+    }
     unsafe {
         CTX = Some(Ctx {
             app: app as *mut App<'_> as *mut App<'static>,
@@ -169,32 +305,106 @@ fn call(
     result
 }
 
-fn handle_result(app: &mut App, result: AppResult) {
+/// `Enter` for a freshly loaded segment, plus the two checks that make a
+/// stack-aliasing extension safe: the canary above the extension has to
+/// survive, and an oversized segment has to be gone by the time this returns.
+fn enter_call(app: &mut App, syst: &mut SYST) -> AppResult {
+    let result = call(app, syst, core::ptr::null_mut(), AppEvent::Enter);
+    let ext = unsafe { ARENA_EXT };
+    if ext == 0 {
+        return result;
+    }
+    if !canary_intact(ext) {
+        return AppResult::Fault(FAULT_STACK_CANARY);
+    }
     match result {
-        AppResult::Continue => {}
-        AppResult::Exit | AppResult::Fault(_) => {
-            unsafe { LOADED_ENTRY = None };
-            app.mode = Mode::AppMenu;
+        AppResult::Continue => AppResult::Fault(FAULT_OVERSIZE_CONTINUE),
+        other => other,
+    }
+}
+
+/// A segment switch re-enters the loader from inside a dispatch, so bound the
+/// hops: a segment that chains straight out of its own `Enter` would otherwise
+/// spin forever.
+const MAX_CHAIN_HOPS: u8 = 4;
+
+/// An app that owned the radio (a satellite tracker parks it on a Doppler-
+/// corrected satellite frequency) must not leave it there, and must not leave
+/// it keyed, so put the master VFO back on air unconditionally.
+fn leave_app(app: &mut App, syst: &mut SYST) {
+    unsafe {
+        LOADED_ENTRY = None;
+        HANDOFF_LEN = 0;
+        ARENA_EXT = 0;
+    }
+    app.mode = Mode::AppMenu;
+    unsafe { APP_TX_ENABLED = false };
+    if app.is_transmitting() {
+        app.set_ptt(syst, false);
+    }
+    app.sync_watching_to_master(syst);
+    app.reset_key_idle();
+}
+
+fn handle_result(app: &mut App, syst: &mut SYST, result: AppResult) {
+    let mut result = result;
+    let mut hops = 0u8;
+    loop {
+        let seg = match result {
+            AppResult::Continue => return,
+            AppResult::Exit | AppResult::Fault(_) => {
+                leave_app(app, syst);
+                return;
+            }
+            AppResult::Chain(seg) => seg,
+        };
+
+        hops += 1;
+        let slot = match app.mode {
+            Mode::External(slot) if hops <= MAX_CHAIN_HOPS => slot,
+            _ => {
+                leave_app(app, syst);
+                return;
+            }
+        };
+
+        match load_segment(app, slot, seg) {
+            Ok(entry) => unsafe {
+                LOADED_ENTRY = Some(entry);
+                NEEDS_FULL_CLEAR = true;
+                LIST_CACHE = None;
+                // Per segment, not per app: the tracking segment may key the
+                // transmitter, the editor it chains back to may not.
+                APP_TX_ENABLED = false;
+            },
+            Err(e) => {
+                unsafe { LAST_LOAD_ERR = load_err_code(&e) };
+                leave_app(app, syst);
+                return;
+            }
         }
+        // deliberately keeps HANDOFF: that is how segments talk to each other
+        result = enter_call(app, syst);
     }
 }
 
 pub(crate) fn enter(app: &mut App, syst: &mut SYST, slot: u8) {
-    match load(app, slot) {
+    match load_segment(app, slot, 0) {
         Ok(entry) => {
             unsafe {
                 LOADED_ENTRY = Some(entry);
                 NEEDS_FULL_CLEAR = true;
 
                 LIST_CACHE = None;
+                HANDOFF_LEN = 0;
+                APP_TX_ENABLED = false;
             }
             app.mode = Mode::External(slot);
-            let result =
-                call(app, syst, core::ptr::null_mut(), AppEvent::Enter);
-            handle_result(app, result);
+            let result = enter_call(app, syst);
+            handle_result(app, syst, result);
         }
-        Err(_) => {
-            // TODO: error code return to firmware
+        Err(e) => {
+            unsafe { LAST_LOAD_ERR = load_err_code(&e) };
         }
     }
 }
@@ -205,7 +415,7 @@ pub(crate) fn dispatch_key(app: &mut App, syst: &mut SYST, ev: KeyEvent) {
         kind: ev.kind as u8,
     };
     let result = call(app, syst, core::ptr::null_mut(), event);
-    handle_result(app, result);
+    handle_result(app, syst, result);
 }
 
 pub(crate) fn tick(app: &mut App, syst: &mut SYST, dt_100us: u32) {
@@ -215,7 +425,7 @@ pub(crate) fn tick(app: &mut App, syst: &mut SYST, dt_100us: u32) {
         core::ptr::null_mut(),
         AppEvent::Tick { dt_100us },
     );
-    handle_result(app, result);
+    handle_result(app, syst, result);
 }
 
 pub(crate) fn draw(lcd: &mut St7735<'_>, app: &mut App, syst: &mut SYST) {
@@ -231,7 +441,7 @@ pub(crate) fn draw(lcd: &mut St7735<'_>, app: &mut App, syst: &mut SYST) {
 
     let lcd_ptr = lcd as *mut St7735<'_> as *mut St7735<'static>;
     let result = call(app, syst, lcd_ptr, AppEvent::Draw);
-    handle_result(app, result);
+    handle_result(app, syst, result);
 }
 
 // --------
@@ -787,6 +997,115 @@ extern "C" fn api_subaudio_format(v: i32, out: *mut u8, cap: u16) -> u16 {
     n as u16
 }
 
+// Firmware-owned, so it outlives the arena across a segment switch.
+static mut APP_HANDOFF: [u8; HANDOFF_SIZE] = [0; HANDOFF_SIZE];
+static mut HANDOFF_LEN: u16 = 0;
+
+#[inline(never)]
+extern "C" fn api_handoff_write(buf: *const u8, len: u16) -> bool {
+    if buf.is_null() || len as usize > HANDOFF_SIZE {
+        return false;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            buf,
+            core::ptr::addr_of_mut!(APP_HANDOFF) as *mut u8,
+            len as usize,
+        );
+        HANDOFF_LEN = len;
+    }
+    true
+}
+
+#[inline(never)]
+extern "C" fn api_handoff_read(buf: *mut u8, len: u16) -> u16 {
+    if buf.is_null() {
+        return 0;
+    }
+    let n = unsafe { HANDOFF_LEN }.min(len) as usize;
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            core::ptr::addr_of!(APP_HANDOFF) as *const u8,
+            buf,
+            n,
+        );
+    }
+    n as u16
+}
+
+#[inline(never)]
+extern "C" fn api_set_bandwidth(wide: bool) {
+    app_ref().radio_mut().set_wide_bandwidth(wide);
+}
+
+#[inline(never)]
+extern "C" fn api_set_sql_level(level: u8) {
+    let (app, syst) = (app_ref(), syst_ref());
+    app.radio_mut().set_sql_level(syst, level);
+}
+
+#[inline(never)]
+extern "C" fn api_set_monitor(on: bool) {
+    app_ref().radio_mut().set_monitor(on);
+}
+
+#[inline(never)]
+extern "C" fn api_enter_rx() {
+    let (app, syst) = (app_ref(), syst_ref());
+    app.radio_mut().enter_rx(syst);
+}
+
+#[inline(never)]
+extern "C" fn api_retune_rx(hz: u32, wide: bool) {
+    let (app, syst) = (app_ref(), syst_ref());
+    app.radio_mut().retune_rx(syst, hz, wide);
+}
+
+#[inline(never)]
+extern "C" fn api_read_rf_gains(out: *mut u16) -> bool {
+    if out.is_null() {
+        return false;
+    }
+    let (app, syst) = (app_ref(), syst_ref());
+    let (lnas, lna, pga, if_gain) = app.radio_mut().read_rf_gains(syst);
+    unsafe {
+        out.write(lnas as u16);
+        out.add(1).write(lna as u16);
+        out.add(2).write(pga as u16);
+        out.add(3).write(if_gain);
+    }
+    true
+}
+
+#[inline(never)]
+extern "C" fn api_adjust_rf_gain(menu: u8, up: bool) {
+    if menu > 3 {
+        return;
+    }
+    let (app, syst) = (app_ref(), syst_ref());
+    // ABI is 0-based to match the order `read_rf_gains` writes them out; the
+    // driver numbers the same four stages from 1.
+    app.radio_mut().adjust_rf_gain(syst, menu + 1, up);
+}
+
+/// Opt-in TX permission for the loaded app; see `Api::set_tx_enabled`.
+static mut APP_TX_ENABLED: bool = false;
+
+pub(super) fn tx_enabled() -> bool {
+    unsafe { core::ptr::read(core::ptr::addr_of!(APP_TX_ENABLED)) }
+}
+
+#[inline(never)]
+extern "C" fn api_set_tx_enabled(on: bool) {
+    unsafe { APP_TX_ENABLED = on };
+}
+
+#[inline(never)]
+extern "C" fn api_tx_state() -> u32 {
+    let app = app_ref();
+    (app.is_transmitting() as u32) | ((app.tx_prohibited() as u32) << 1)
+}
+
 #[inline(never)]
 extern "C" fn api_app_fault(line: u32) -> ! {
     let _ = line;
@@ -834,4 +1153,15 @@ static API: Api = Api {
     subaudio_index_of_code: api_subaudio_index_of_code,
     subaudio_code_of_index: api_subaudio_code_of_index,
     subaudio_format: api_subaudio_format,
+    handoff_write: api_handoff_write,
+    handoff_read: api_handoff_read,
+    set_bandwidth: api_set_bandwidth,
+    set_sql_level: api_set_sql_level,
+    set_monitor: api_set_monitor,
+    enter_rx: api_enter_rx,
+    retune_rx: api_retune_rx,
+    read_rf_gains: api_read_rf_gains,
+    adjust_rf_gain: api_adjust_rf_gain,
+    tx_state: api_tx_state,
+    set_tx_enabled: api_set_tx_enabled,
 };

@@ -15,7 +15,9 @@ use core::fmt::Write;
 use cortex_m_rt::entry;
 use panic_halt as _;
 
-use device::radio::{AniConfig, ChannelConfig, Modulation, Power, Radio, SubAudio};
+use device::radio::{
+    AniConfig, ChannelConfig, Modulation, Power, Radio, SubAudio,
+};
 use drivers::fd6818b::Fd6818;
 use drivers::norflash::NorFlash;
 use hal::clock::{self, SCLK_HZ};
@@ -129,9 +131,9 @@ fn main() -> ! {
             .gpiocen()
             .set_bit()
     });
-    dp.crm
-        .apb2en()
-        .modify(|_, w| w.usart1en().set_bit().spi1en().set_bit().adcen().set_bit());
+    dp.crm.apb2en().modify(|_, w| {
+        w.usart1en().set_bit().spi1en().set_bit().adcen().set_bit()
+    });
     dp.crm
         .apb1en()
         .modify(|_, w| w.spi2en().set_bit().tmr14en().set_bit());
@@ -317,8 +319,15 @@ fn main() -> ! {
 
     let mut fast_tick: u32 = 0;
     let mut real_tick10_last = hal::uptime::now();
+    let mut overlay_tick_last = real_tick10_last;
     loop {
-        check_power_off(&dp.gpiob, &dp.gpiof, &mut serial, &mut app, &mut cp.SYST);
+        check_power_off(
+            &dp.gpiob,
+            &dp.gpiof,
+            &mut serial,
+            &mut app,
+            &mut cp.SYST,
+        );
         app.poll_keys(&mut cp.SYST);
 
         if let Some(level) = app.radio_mut().poll_ptt() {
@@ -328,7 +337,8 @@ fn main() -> ! {
         let elapsed10 = hal::uptime::now().wrapping_sub(real_tick10_last);
         if elapsed10 >= 100 {
             let n10 = elapsed10 / 100;
-            real_tick10_last = real_tick10_last.wrapping_add(n10.wrapping_mul(100));
+            real_tick10_last =
+                real_tick10_last.wrapping_add(n10.wrapping_mul(100));
             app.poll_tot(&mut cp.SYST, n10);
             app.poll_no_channels_notice(n10);
         }
@@ -354,8 +364,11 @@ fn main() -> ! {
             }
             app.poll_battery();
 
+            let now10 = hal::uptime::now();
+            let dt10 = now10.wrapping_sub(overlay_tick_last);
+            overlay_tick_last = now10;
             if matches!(app.mode(), app::Mode::External(_)) {
-                app::overlay::tick(&mut app, &mut cp.SYST, 100);
+                app::overlay::tick(&mut app, &mut cp.SYST, dt10 as u32);
             }
 
             board::set_rx_led(&dp.gpioa, rx_active && !app.is_transmitting());

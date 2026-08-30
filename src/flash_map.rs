@@ -19,7 +19,8 @@ pub mod addr {
     pub const DEV_BATT_ADDR: u32 = 0xF200;
     pub const DEV_BATT_LEN: usize = 6;
 
-    pub const MODULATION_CAL_ADDR: u32 = crate::drivers::norflash::CAL_BLOCK_ADDR;
+    pub const MODULATION_CAL_ADDR: u32 =
+        crate::drivers::norflash::CAL_BLOCK_ADDR;
 
     pub const BAND_ADDR: u32 = 0xF230;
     pub const BAND_LEN: usize = 21;
@@ -54,13 +55,21 @@ pub mod addr {
     /// after voice prompt
     pub const OVERLAY_APP_ADDR: u32 = 0x14C000;
 
-    /// 16KB each app (8KB per elf)
-    pub const OVERLAY_SLOT_SIZE: u32 = 16 * 1024;
+    /// 32KB each app package: up to `abi::MAX_SEGMENTS` (4) sub-programs
+    /// of 8KB (`ARENA_SIZE`) each
+    pub const OVERLAY_SLOT_SIZE: u32 = 32 * 1024;
     pub const OVERLAY_SLOT_COUNT: u8 = 4;
 
     pub const fn overlay_slot_addr(slot: u8) -> u32 {
         OVERLAY_APP_ADDR + slot as u32 * OVERLAY_SLOT_SIZE
     }
+
+    /// Everything past the slots is app-private data. Apps reach it through
+    /// `nor_read`/`nor_write`/`nor_erase_sector`, which refuse anything below
+    /// `OVERLAY_APP_ADDR`, so firmware data can never be clobbered from an
+    /// app. Firmware does not interpret this region.
+    pub const OVERLAY_DATA_ADDR: u32 =
+        OVERLAY_APP_ADDR + OVERLAY_SLOT_SIZE * OVERLAY_SLOT_COUNT as u32;
 }
 
 pub const FIRST_BOOT_MAGIC: [u8; 4] = *b"AURA";
@@ -151,7 +160,9 @@ impl Channel {
             ptt_id: buf[13],
             tx_power: buf[14],
             flags: buf[15],
-            decoder_code: u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]),
+            decoder_code: u32::from_le_bytes([
+                buf[16], buf[17], buf[18], buf[19],
+            ]),
             name: buf[20..32].try_into().unwrap(),
         }
     }
@@ -307,7 +318,9 @@ impl VfoMode {
             step: buf[19],
             offset_digits: buf[20..27].try_into().unwrap(),
             sp_mute: buf[27],
-            decoder_code: u32::from_le_bytes([buf[28], buf[29], buf[30], buf[31]]),
+            decoder_code: u32::from_le_bytes([
+                buf[28], buf[29], buf[30], buf[31],
+            ]),
         }
     }
 

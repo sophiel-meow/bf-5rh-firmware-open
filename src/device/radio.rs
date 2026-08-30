@@ -20,8 +20,9 @@ const TONE_SETTLE_MS: u32 = 2;
 /// A2=110Hz, values in `hz_div_10`. Index 0 is `tone_index` 1 (A2), so a
 /// boot-tune pair looks up `BOOT_TUNE_HZ_DIV_10[tone_index - 1]`.
 pub const BOOT_TUNE_HZ_DIV_10: [u16; 45] = [
-    11, 12, 12, 13, 14, 15, 16, 16, 17, 19, 20, 21, 22, 23, 25, 26, 28, 29, 31, 33, 35, 37, 39, 42,
-    44, 47, 49, 52, 55, 59, 62, 66, 70, 74, 78, 83, 88, 93, 99, 105, 111, 117, 124, 132, 140,
+    11, 12, 12, 13, 14, 15, 16, 16, 17, 19, 20, 21, 22, 23, 25, 26, 28, 29, 31,
+    33, 35, 37, 39, 42, 44, 47, 49, 52, 55, 59, 62, 66, 70, 74, 78, 83, 88, 93,
+    99, 105, 111, 117, 124, 132, 140,
 ];
 
 /// One period unit in an OpenGD77-style boot-tune `(tone_index, duration)`
@@ -190,22 +191,29 @@ impl BandLock {
             FreqRange { low_hz, high_hz }
         }
         match self {
-            BandLock::Fcc => {
-                FreqRanges::from_slice(&[r(144_000_000, 148_000_000), r(420_000_000, 450_000_000)])
+            BandLock::Fcc => FreqRanges::from_slice(&[
+                r(144_000_000, 148_000_000),
+                r(420_000_000, 450_000_000),
+            ]),
+            BandLock::Ce => FreqRanges::from_slice(&[
+                r(144_000_000, 146_000_000),
+                r(430_000_000, 440_000_000),
+            ]),
+            BandLock::Gb => FreqRanges::from_slice(&[
+                r(144_000_000, 148_000_000),
+                r(430_000_000, 440_000_000),
+            ]),
+            BandLock::Mhz430 => FreqRanges::from_slice(&[
+                r(137_000_000, 174_000_000),
+                r(400_000_000, 430_000_000),
+            ]),
+            BandLock::Mhz438 => FreqRanges::from_slice(&[
+                r(137_000_000, 174_000_000),
+                r(400_000_000, 438_000_000),
+            ]),
+            BandLock::Pmr => {
+                FreqRanges::from_slice(&[r(446_006_250, 446_193_750)])
             }
-            BandLock::Ce => {
-                FreqRanges::from_slice(&[r(144_000_000, 146_000_000), r(430_000_000, 440_000_000)])
-            }
-            BandLock::Gb => {
-                FreqRanges::from_slice(&[r(144_000_000, 148_000_000), r(430_000_000, 440_000_000)])
-            }
-            BandLock::Mhz430 => {
-                FreqRanges::from_slice(&[r(137_000_000, 174_000_000), r(400_000_000, 430_000_000)])
-            }
-            BandLock::Mhz438 => {
-                FreqRanges::from_slice(&[r(137_000_000, 174_000_000), r(400_000_000, 438_000_000)])
-            }
-            BandLock::Pmr => FreqRanges::from_slice(&[r(446_006_250, 446_193_750)]),
             BandLock::GmrsFrsMurs => FreqRanges::from_slice(&[
                 r(462_550_000, 462_725_000),
                 r(467_550_000, 467_725_000),
@@ -215,9 +223,10 @@ impl BandLock {
                 r(154_570_000, 154_570_000),
                 r(154_600_000, 154_600_000),
             ]),
-            BandLock::Ca => {
-                FreqRanges::from_slice(&[r(144_000_000, 148_000_000), r(430_000_000, 450_000_000)])
-            }
+            BandLock::Ca => FreqRanges::from_slice(&[
+                r(144_000_000, 148_000_000),
+                r(430_000_000, 450_000_000),
+            ]),
             BandLock::All => FreqRanges::empty(),
             BandLock::None => FreqRanges::hardware(),
         }
@@ -439,6 +448,14 @@ impl<'a> Radio<'a> {
         self.cfg.tx_freq_hz = freq_hz;
     }
 
+    pub fn tx_freq_hz(&self) -> u32 {
+        self.cfg.tx_freq_hz
+    }
+
+    pub fn power(&self) -> Power {
+        self.cfg.power
+    }
+
     pub fn set_power(&mut self, power: Power) {
         self.cfg.power = power;
     }
@@ -586,8 +603,12 @@ impl<'a> Radio<'a> {
         } else {
             AfOutState::Mute
         };
-        self.fd6818
-            .set_af_out(syst, state, self.cfg.wide_band, self.cfg.modulation);
+        self.fd6818.set_af_out(
+            syst,
+            state,
+            self.cfg.wide_band,
+            self.cfg.modulation,
+        );
         self.fd6818.set_scramble(syst, self.scramble_level);
         self.set_speaker(self.audio_open);
         false
@@ -626,8 +647,12 @@ impl<'a> Radio<'a> {
         } else {
             AfOutState::Mute
         };
-        self.fd6818
-            .set_af_out(syst, state, self.cfg.wide_band, self.cfg.modulation);
+        self.fd6818.set_af_out(
+            syst,
+            state,
+            self.cfg.wide_band,
+            self.cfg.modulation,
+        );
         self.fd6818.set_scramble(syst, self.scramble_level);
         if local_speaker {
             self.set_speaker(self.audio_open);
@@ -673,7 +698,11 @@ impl<'a> Radio<'a> {
         self.rssi_open
     }
 
-    pub fn poll_squelch(&mut self, syst: &mut SYST, debounce_ticks: u8) -> bool {
+    pub fn poll_squelch(
+        &mut self,
+        syst: &mut SYST,
+        debounce_ticks: u8,
+    ) -> bool {
         if self.audio_open && self.fd6818.tail_detected(syst) && !self.monitor {
             self.audio_open = false;
             self.sq_debounce = 0;
@@ -702,7 +731,9 @@ impl<'a> Radio<'a> {
 
         let tone_ok = match self.cfg.subaudio_rx {
             SubAudio::None => true,
-            SubAudio::Ctcss(_) | SubAudio::Dcs { .. } => self.fd6818.subaudio_matched(syst),
+            SubAudio::Ctcss(_) | SubAudio::Dcs { .. } => {
+                self.fd6818.subaudio_matched(syst)
+            }
         };
         let open = self.monitor || (rssi_open && tone_ok);
         if open != self.audio_open {
@@ -715,8 +746,12 @@ impl<'a> Radio<'a> {
                 } else {
                     AfOutState::Mute
                 };
-                self.fd6818
-                    .set_af_out(syst, state, self.cfg.wide_band, self.cfg.modulation);
+                self.fd6818.set_af_out(
+                    syst,
+                    state,
+                    self.cfg.wide_band,
+                    self.cfg.modulation,
+                );
                 board::set_rx_led(self.gpioa, open);
                 self.set_speaker(open);
             }
@@ -749,7 +784,10 @@ impl<'a> Radio<'a> {
         self.fd6818.set_tx_band_off(syst);
         self.fd6818.power_rx(syst);
         self.fd6818.set_scramble(syst, self.scramble_level);
-        let tuned_freq_hz = if matches!(self.cfg.modulation, Modulation::Usb | Modulation::Cw) {
+        let tuned_freq_hz = if matches!(
+            self.cfg.modulation,
+            Modulation::Usb | Modulation::Cw
+        ) {
             self.cfg.freq_hz.saturating_add_signed(self.rit_offset_hz)
         } else {
             self.cfg.freq_hz
@@ -794,7 +832,9 @@ impl<'a> Radio<'a> {
 
     #[must_use]
     pub fn enter_tx(&mut self, syst: &mut SYST) -> bool {
-        if !self.tx_allowed.allows(self.cfg.tx_freq_hz) || self.cfg.modulation != Modulation::Fm {
+        if !self.tx_allowed.allows(self.cfg.tx_freq_hz)
+            || self.cfg.modulation != Modulation::Fm
+        {
             return false;
         }
         self.set_speaker(false);
@@ -839,7 +879,12 @@ impl<'a> Radio<'a> {
         self.fd6818.sleep(syst);
     }
 
-    pub fn tune_search_candidate(&mut self, syst: &mut SYST, freq_hz: u32, uhf_path: bool) {
+    pub fn tune_search_candidate(
+        &mut self,
+        syst: &mut SYST,
+        freq_hz: u32,
+        uhf_path: bool,
+    ) {
         self.fd6818.idle(syst);
         self.fd6818.set_frequency_hz(syst, freq_hz);
         self.fd6818.set_wide_bandwidth(syst, true);

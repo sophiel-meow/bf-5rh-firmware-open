@@ -2,7 +2,10 @@ use cortex_m::peripheral::SYST;
 
 use crate::device::radio::Power;
 
-use super::{App, Mode, DUAL_STANDBY_HOLD_TICKS, TICKS_PER_SECOND, VOX_HOLD_AFTER_PTT_TICKS};
+use super::{
+    App, Mode, DUAL_STANDBY_HOLD_TICKS, TICKS_PER_SECOND,
+    VOX_HOLD_AFTER_PTT_TICKS,
+};
 
 fn resolve_ani_target(app: &mut App) -> Option<[u8; 3]> {
     if let Some(id) = app.ani_target_override {
@@ -22,7 +25,15 @@ pub(super) fn set_ptt(app: &mut App, syst: &mut SYST, pressed: bool) {
     app.note_power_save_activity(syst);
     app.note_backlight_activity();
     if pressed && !app.transmitting {
-        if app.mode != Mode::Standby {
+        // An overlay app owns the radio config while it runs, so reloading
+        // the VFO side config here would undo it.
+        let external = matches!(app.mode, Mode::External(_));
+        if app.mode != Mode::Standby && !external {
+            return;
+        }
+        // An overlay app has to opt in before the PTT key can key the
+        // transmitter, and a satellite tracker on an RX-only bird never does.
+        if external && !super::overlay::tx_enabled() {
             return;
         }
         if app.settings.tx_forbid {
@@ -32,16 +43,21 @@ pub(super) fn set_ptt(app: &mut App, syst: &mut SYST, pressed: bool) {
             return;
         }
 
-        app.watching = app.master;
-        let s = &app.sides[app.master];
-        let tx_freq_hz = s.cfg.tx_freq_hz;
-        let power = s.cfg.power;
-        app.radio.set_frequency(s.cfg.freq_hz);
-        app.radio.set_tx_frequency(tx_freq_hz);
-        app.radio.set_power(power);
-        app.radio.set_subaudio_tx(s.cfg.subaudio_tx);
-        app.radio.set_subaudio_rx(s.cfg.subaudio_rx);
-        app.radio.set_modulation(s.cfg.modulation);
+        let (tx_freq_hz, power) = if external {
+            (app.radio.tx_freq_hz(), app.radio.power())
+        } else {
+            app.watching = app.master;
+            let s = &app.sides[app.master];
+            let tx_freq_hz = s.cfg.tx_freq_hz;
+            let power = s.cfg.power;
+            app.radio.set_frequency(s.cfg.freq_hz);
+            app.radio.set_tx_frequency(tx_freq_hz);
+            app.radio.set_power(power);
+            app.radio.set_subaudio_tx(s.cfg.subaudio_tx);
+            app.radio.set_subaudio_rx(s.cfg.subaudio_rx);
+            app.radio.set_modulation(s.cfg.modulation);
+            (tx_freq_hz, power)
+        };
         reload_pa_calibration(app, tx_freq_hz, power);
         if app.radio.enter_tx(syst) {
             app.transmitting = true;
@@ -56,7 +72,7 @@ pub(super) fn set_ptt(app: &mut App, syst: &mut SYST, pressed: bool) {
                 } else if dial.len > 0 {
                     app.radio.send_dtmf_digits(syst, digits);
                 }
-            } else if app.settings.ani_tx {
+            } else if app.settings.ani_tx && !external {
                 if let Some(target) = resolve_ani_target(app) {
                     app.radio.send_ani(syst, target);
                 }
