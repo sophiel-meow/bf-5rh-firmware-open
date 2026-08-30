@@ -6,6 +6,12 @@ pub const MAGIC: [u8; 4] = *b"OVL1";
 
 pub const ARENA_SIZE: usize = 8192;
 
+/// Hard ceiling for an *oversized* segment.
+pub const ARENA_MAX: usize = 12288;
+
+/// firmware-owned scratch that outlives a segment switch
+pub const HANDOFF_SIZE: usize = 64;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ListRow {
@@ -110,6 +116,35 @@ pub struct Api {
     pub subaudio_code_of_index: extern "C" fn(v: i32) -> u16,
     // return length
     pub subaudio_format: extern "C" fn(v: i32, out: *mut u8, cap: u16) -> u16,
+
+    /// handoff buffer, survives `AppResult::Chain` but not app exit.
+    /// `handoff_write` fails when `len > HANDOFF_SIZE`;
+    /// `handoff_read` returns the number of bytes copied out
+    pub handoff_write: extern "C" fn(buf: *const u8, len: u16) -> bool,
+    pub handoff_read: extern "C" fn(buf: *mut u8, len: u16) -> u16,
+
+    // RF, tracking-side
+    pub set_bandwidth: extern "C" fn(wide: bool),
+    pub set_sql_level: extern "C" fn(level: u8),
+    pub set_monitor: extern "C" fn(on: bool),
+    /// Apply everything programmed so far (frequency, modulation, bandwidth,
+    /// subaudio, squelch) to the transceiver and enter RX. `set_*` only
+    /// updates the in-memory config; this is what reaches the chip.
+    pub enter_rx: extern "C" fn(),
+    /// Frequency-only retune that stays in RX, for per-second Doppler
+    /// stepping: cheaper than `enter_rx`, but leaves squelch and the audio
+    /// path alone.
+    pub retune_rx: extern "C" fn(hz: u32, wide: bool),
+    /// writes 4 u16: LNAs, LNA, PGA, IF
+    pub read_rf_gains: extern "C" fn(out: *mut u16) -> bool,
+    /// `menu`: 0=LNAs 1=LNA 2=PGA 3=IF
+    pub adjust_rf_gain: extern "C" fn(menu: u8, up: bool),
+    /// bit0 = transmitting, bit1 = last TX attempt refused
+    pub tx_state: extern "C" fn() -> u32,
+    /// Whether the PTT key may key the transmitter while this app is loaded.
+    /// Loading an app, and every segment switch, resets this to `false`, so an
+    /// app that never calls it cannot transmit at all
+    pub set_tx_enabled: extern "C" fn(on: bool),
 }
 
 #[repr(C)]
@@ -126,35 +161,75 @@ pub enum AppResult {
     Continue,
     Exit,
     Fault(u32),
+    /// switch to another segment of the same package; the handoff buffer
+    /// survives the switch, the arena does not
+    Chain(u8),
 }
 
+/// Max sub-programs packed into one `.app` package.
+pub const MAX_SEGMENTS: usize = 4;
+
+/// One sub-program inside a package.
 #[repr(C)]
-pub struct ImageHeader {
-    pub magic: [u8; 4],
-    pub build_hash: u32,
+#[derive(Clone, Copy, Default)]
+pub struct SegmentEntry {
+    /// byte offset of the image from the start of the package
+    pub offset: u32,
     pub image_len: u32,
     pub bss_len: u32,
     pub entry_off: u32,
     pub crc32: u32,
+}
+
+impl SegmentEntry {
+    pub const SIZE: usize = 20;
+
+    pub fn from_bytes(b: &[u8]) -> SegmentEntry {
+        let w =
+            |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        SegmentEntry {
+            offset: w(0),
+            image_len: w(4),
+            bss_len: w(8),
+            entry_off: w(12),
+            crc32: w(16),
+        }
+    }
+}
+
+/// Package header, at offset 0 of a flash slot.
+#[repr(C)]
+pub struct PackageHeader {
+    pub magic: [u8; 4],
+    pub build_hash: u32,
+    /// 1..=[`MAX_SEGMENTS`]
+    pub segment_count: u8,
+    pub _pad: [u8; 3],
 
     /// ASCII, padding to 16
     pub name: [u8; 16],
+
+    pub segments: [SegmentEntry; MAX_SEGMENTS],
 }
 
-impl ImageHeader {
-    pub const SIZE: usize = 40;
+impl PackageHeader {
+    pub const SIZE: usize = 28 + MAX_SEGMENTS * SegmentEntry::SIZE;
 
-    pub fn from_bytes(b: &[u8; Self::SIZE]) -> ImageHeader {
+    pub fn from_bytes(b: &[u8; Self::SIZE]) -> PackageHeader {
         let mut name = [0u8; 16];
-        name.copy_from_slice(&b[24..40]);
-        ImageHeader {
+        name.copy_from_slice(&b[12..28]);
+        let mut segments = [SegmentEntry::default(); MAX_SEGMENTS];
+        for (i, seg) in segments.iter_mut().enumerate() {
+            let off = 28 + i * SegmentEntry::SIZE;
+            *seg = SegmentEntry::from_bytes(&b[off..off + SegmentEntry::SIZE]);
+        }
+        PackageHeader {
             magic: [b[0], b[1], b[2], b[3]],
             build_hash: u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
-            image_len: u32::from_le_bytes([b[8], b[9], b[10], b[11]]),
-            bss_len: u32::from_le_bytes([b[12], b[13], b[14], b[15]]),
-            entry_off: u32::from_le_bytes([b[16], b[17], b[18], b[19]]),
-            crc32: u32::from_le_bytes([b[20], b[21], b[22], b[23]]),
+            segment_count: b[8],
+            _pad: [b[9], b[10], b[11]],
             name,
+            segments,
         }
     }
 
@@ -165,6 +240,15 @@ impl ImageHeader {
             .position(|&b| b == 0)
             .unwrap_or(self.name.len());
         core::str::from_utf8(&self.name[..end]).unwrap_or("APP")
+    }
+
+    pub fn segment(&self, idx: u8) -> Option<&SegmentEntry> {
+        if idx as usize >= self.segment_count as usize
+            || self.segment_count as usize > MAX_SEGMENTS
+        {
+            return None;
+        }
+        self.segments.get(idx as usize)
     }
 }
 
