@@ -63,7 +63,11 @@ impl<const PAYLOAD_LEN: usize> WearLeveledRegion<PAYLOAD_LEN> {
         u32::MAX
     }
 
-    fn read_slot(&self, flash: &mut NorFlash, index: u32) -> Option<[u8; PAYLOAD_LEN]> {
+    fn read_slot(
+        &self,
+        flash: &mut NorFlash,
+        index: u32,
+    ) -> Option<[u8; PAYLOAD_LEN]> {
         let mut buf = [0u8; PAYLOAD_LEN];
         let mut crc_buf = [0u8; 2];
         let addr = self.slot_addr(index);
@@ -77,7 +81,12 @@ impl<const PAYLOAD_LEN: usize> WearLeveledRegion<PAYLOAD_LEN> {
         }
     }
 
-    fn write_slot(&self, flash: &mut NorFlash, index: u32, payload: &[u8; PAYLOAD_LEN]) {
+    fn write_slot(
+        &self,
+        flash: &mut NorFlash,
+        index: u32,
+        payload: &[u8; PAYLOAD_LEN],
+    ) {
         let addr = self.slot_addr(index);
         flash.write_bytes(addr, payload);
         flash.write_bytes(
@@ -98,11 +107,14 @@ impl<const PAYLOAD_LEN: usize> WearLeveledRegion<PAYLOAD_LEN> {
         let index = self.find_free_slot(flash);
         let max_slots = self.max_slots();
 
-        if index < max_slots && self.read_slot(flash, index).as_ref() == Some(payload) {
+        if index < max_slots
+            && self.read_slot(flash, index).as_ref() == Some(payload)
+        {
             return;
         }
 
-        let has_room = matches!(index.checked_add(1), Some(next) if next < max_slots);
+        let has_room =
+            matches!(index.checked_add(1), Some(next) if next < max_slots);
         if has_room {
             self.write_slot(flash, index + 1, payload);
 

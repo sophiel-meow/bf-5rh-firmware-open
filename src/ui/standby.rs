@@ -175,7 +175,8 @@ where
         .map(|p| p.overlay_active())
         .unwrap_or(false);
     let overlay_content_changed = cache.structural.as_ref().map_or(true, |p| {
-        p.tx_prohibited != snap.tx_prohibited || p.no_channels_notice != snap.no_channels_notice
+        p.tx_prohibited != snap.tx_prohibited
+            || p.no_channels_notice != snap.no_channels_notice
     });
     let first_frame = cache.structural.is_none();
 
@@ -228,7 +229,8 @@ where
             };
             if master_changed
                 || row1_input_changed
-                || (p.is_channel_mode, p.channel_num) != (s.is_channel_mode, s.channel_num)
+                || (p.is_channel_mode, p.channel_num)
+                    != (s.is_channel_mode, s.channel_num)
             {
                 draw_row1(lcd, app, i, top);
             }
@@ -237,17 +239,20 @@ where
                 prev.freq_input_len != snap.freq_input_len
             } else {
                 prev.dtmf_dial_active != snap.dtmf_dial_active
-                    || (snap.dtmf_dial_active && prev.dtmf_dial_len != snap.dtmf_dial_len)
+                    || (snap.dtmf_dial_active
+                        && prev.dtmf_dial_len != snap.dtmf_dial_len)
             };
             if master_changed
                 || row2_input_changed
                 || p.freq_hz != s.freq_hz
-                || (p.is_channel_mode, p.channel_num) != (s.is_channel_mode, s.channel_num)
+                || (p.is_channel_mode, p.channel_num)
+                    != (s.is_channel_mode, s.channel_num)
             {
                 draw_row2(lcd, app, i, top);
             }
 
-            let row3_input_changed = !is_master && prev.dtmf_dial_active != snap.dtmf_dial_active;
+            let row3_input_changed =
+                !is_master && prev.dtmf_dial_active != snap.dtmf_dial_active;
             if master_changed
                 || row3_input_changed
                 || p_tx_here != s_tx_here
@@ -320,7 +325,9 @@ fn draw_overlay<D>(lcd: &mut D, text: &str, bg: Rgb565)
 where
     D: DrawTarget<Color = Rgb565>,
 {
-    let width = text.chars().count() as i32 * FONT_6X10.character_size.width as i32 + 12;
+    let width = text.chars().count() as i32
+        * FONT_6X10.character_size.width as i32
+        + 12;
     let x = (SCREEN_W - width) / 2;
     let y = SCREEN_H / 2 - 10;
     Rectangle::new(Point::new(x, y), Size::new(width as u32, 20))
@@ -380,8 +387,12 @@ where
     .ok();
 }
 
-fn draw_tx_timer<D>(lcd: &mut D, app: &app::App, last: &mut Option<u32>, force: bool)
-where
+fn draw_tx_timer<D>(
+    lcd: &mut D,
+    app: &app::App,
+    last: &mut Option<u32>,
+    force: bool,
+) where
     D: DrawTarget<Color = Rgb565>,
 {
     let secs = app.tx_elapsed_seconds();
@@ -456,8 +467,12 @@ where
 const BATTERY_ICON_W: i32 = 22;
 const BATTERY_ICON_H: i32 = 10;
 
-fn draw_battery_icon<D>(lcd: &mut D, app: &app::App, last: &mut Option<u8>, force: bool)
-where
+fn draw_battery_icon<D>(
+    lcd: &mut D,
+    app: &app::App,
+    last: &mut Option<u8>,
+    force: bool,
+) where
     D: DrawTarget<Color = Rgb565>,
 {
     let bars = app.battery_bars();
@@ -607,7 +622,11 @@ where
     if is_master && app.freq_input_len() > 0 {
         draw_freq_input(lcd, app, row2_baseline);
     } else if !is_master && app.dtmf_dial_active() {
-        draw_dtmf_dial_input(lcd, app, top + ROW1_H + FONT_6X10.baseline as i32);
+        draw_dtmf_dial_input(
+            lcd,
+            app,
+            top + ROW1_H + FONT_6X10.baseline as i32,
+        );
     } else {
         match app.channel_display_mode() {
             ChannelDisplayMode::NameFreq if has_name => {
@@ -684,8 +703,10 @@ where
     let mut small: TextBuf<4> = TextBuf::new();
     write!(small, "{:02}", tail).ok();
 
-    let big_width = big.as_str().len() as i32 * FONT_9X18.character_size.width as i32;
-    let small_width = small.as_str().len() as i32 * FONT_6X10.character_size.width as i32;
+    let big_width =
+        big.as_str().len() as i32 * FONT_9X18.character_size.width as i32;
+    let small_width =
+        small.as_str().len() as i32 * FONT_6X10.character_size.width as i32;
     let big_x = SCREEN_W - RIGHT_MARGIN - small_width - big_width;
 
     Text::new(
@@ -813,7 +834,8 @@ where
         Power::Mid => "MID",
         Power::High => "HIGH",
     };
-    let tone = tone_mode_label(app.side_subaudio_tx(i), app.side_subaudio_rx(i));
+    let tone =
+        tone_mode_label(app.side_subaudio_tx(i), app.side_subaudio_rx(i));
     let dir = if app.side_offset_hz(i) == 0 {
         ""
     } else {
@@ -861,8 +883,13 @@ const BAR_SEG_W: i32 = 5;
 const BAR_MAX_H: i32 = 8;
 const BAR_HOLLOW_COUNT: u8 = 4;
 
-pub(crate) fn draw_classic_bar<D>(lcd: &mut D, x: i32, base_y: i32, level: u8, total: u8)
-where
+pub(crate) fn draw_classic_bar<D>(
+    lcd: &mut D,
+    x: i32,
+    base_y: i32,
+    level: u8,
+    total: u8,
+) where
     D: DrawTarget<Color = Rgb565>,
 {
     let hollow_start = total.saturating_sub(BAR_HOLLOW_COUNT);
@@ -941,7 +968,8 @@ where
 {
     clear_row(lcd, row_y);
     let mic = app.mic_level();
-    let level = ((mic as u16 * MIC_BAR_SEGS as u16 + 127) / 255).min(MIC_BAR_SEGS as u16) as u8;
+    let level = ((mic as u16 * MIC_BAR_SEGS as u16 + 127) / 255)
+        .min(MIC_BAR_SEGS as u16) as u8;
 
     Text::new(
         "MIC",
@@ -970,9 +998,12 @@ where
     };
     for k in 1..=pwr {
         let h = (k + 2).min(10);
-        Rectangle::new(Point::new(12 + k * 4, top + 10 - h), Size::new(3, h as u32))
-            .into_styled(PrimitiveStyle::with_fill(ALERT))
-            .draw(lcd)
-            .ok();
+        Rectangle::new(
+            Point::new(12 + k * 4, top + 10 - h),
+            Size::new(3, h as u32),
+        )
+        .into_styled(PrimitiveStyle::with_fill(ALERT))
+        .draw(lcd)
+        .ok();
     }
 }

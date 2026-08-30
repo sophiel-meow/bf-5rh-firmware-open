@@ -51,7 +51,11 @@ impl<const N: usize> DigitInput<N> {
         v
     }
     /// `int_digits` is how many leading digits sit before the decimal point.
-    pub(crate) fn write_display(&self, int_digits: usize, w: &mut dyn core::fmt::Write) {
+    pub(crate) fn write_display(
+        &self,
+        int_digits: usize,
+        w: &mut dyn core::fmt::Write,
+    ) {
         for i in 0..N {
             if i == int_digits {
                 let _ = w.write_char('.');

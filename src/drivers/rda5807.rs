@@ -150,8 +150,12 @@ impl<'a> Rda5807<'a> {
         };
         self.last_band_base_khz = base;
         let chan = freq_khz.saturating_sub(base) / CHANNEL_SPACING_KHZ;
-        let reg03 = ((chan as u16) << 6) | (1 << 4) | (band << 2) | SPACE_100KHZ;
-        self.write_regs(syst, &[CTRL_NORMAL, reg03, CONFIG_REG04, CONFIG_REG05]);
+        let reg03 =
+            ((chan as u16) << 6) | (1 << 4) | (band << 2) | SPACE_100KHZ;
+        self.write_regs(
+            syst,
+            &[CTRL_NORMAL, reg03, CONFIG_REG04, CONFIG_REG05],
+        );
     }
 
     #[allow(dead_code)]

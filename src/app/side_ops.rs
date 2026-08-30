@@ -50,7 +50,11 @@ pub(super) fn step(app: &mut App, syst: &mut SYST, up: bool) {
     sync_watching_to_master(app, syst);
 }
 
-pub(super) fn find_programmed_channel(app: &mut App, from: u16, up: bool) -> Option<u16> {
+pub(super) fn find_programmed_channel(
+    app: &mut App,
+    from: u16,
+    up: bool,
+) -> Option<u16> {
     let mut num = from;
     for _ in 0..=MAX_CHANNEL_NUM {
         num = if up {
@@ -75,7 +79,9 @@ pub(super) fn commit_input(app: &mut App, syst: &mut SYST) {
     let value = app.input.entered_value();
     match app.sides[app.master].vfo_chan {
         ChVfoMode::Channel => {
-            if value <= MAX_CHANNEL_NUM as u32 && !app.storage.is_channel_empty(value as u16) {
+            if value <= MAX_CHANNEL_NUM as u32
+                && !app.storage.is_channel_empty(value as u16)
+            {
                 load_channel_num(app, value as u16);
                 sync_watching_to_master(app, syst);
             }
@@ -184,8 +190,8 @@ pub(super) fn load_channel_num(app: &mut App, num: u16) {
 
 pub(super) fn refresh_channel_display(app: &mut App, num: u16) {
     for i in 0..app.sides.len() {
-        let showing =
-            app.sides[i].vfo_chan == ChVfoMode::Channel && app.sides[i].channel_num == num;
+        let showing = app.sides[i].vfo_chan == ChVfoMode::Channel
+            && app.sides[i].channel_num == num;
         if !showing {
             continue;
         }

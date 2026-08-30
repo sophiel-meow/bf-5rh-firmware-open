@@ -14,12 +14,12 @@ pub fn init_norflash_pins(gpioa: &pac::Gpioa) {
             .iomc8()
             .bits(0b01)
     });
-    gpioa
-        .muxl()
-        .modify(|_, w| unsafe { w.muxl5().bits(0).muxl6().bits(0).muxl7().bits(0) });
-    gpioa
-        .pull()
-        .modify(|_, w| unsafe { w.pull5().bits(0b00).pull6().bits(0b00).pull7().bits(0b00) });
+    gpioa.muxl().modify(|_, w| unsafe {
+        w.muxl5().bits(0).muxl6().bits(0).muxl7().bits(0)
+    });
+    gpioa.pull().modify(|_, w| unsafe {
+        w.pull5().bits(0b00).pull6().bits(0b00).pull7().bits(0b00)
+    });
     gpioa.scr().write(|w| unsafe { w.bits(NORFLASH_CS_BIT) }); // CS idle high
 }
 

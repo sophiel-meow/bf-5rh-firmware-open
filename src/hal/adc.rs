@@ -15,8 +15,9 @@ impl<'a> Adc<'a> {
         adc.ctrl2().modify(|_, w| w.adcal().set_bit());
         while adc.ctrl2().read().adcal().bit_is_set() {}
 
-        adc.ctrl2()
-            .modify(|_, w| unsafe { w.octesel().bits(0b111).octen().set_bit() });
+        adc.ctrl2().modify(|_, w| unsafe {
+            w.octesel().bits(0b111).octen().set_bit()
+        });
 
         Adc { adc }
     }
@@ -26,13 +27,19 @@ impl<'a> Adc<'a> {
             0..=9 => {
                 let shift = (channel as u32) * 3;
                 self.adc.spt2().modify(|r, w| unsafe {
-                    w.bits((r.bits() & !(0b111 << shift)) | ((SAMPLE_TIME_SLOW as u32) << shift))
+                    w.bits(
+                        (r.bits() & !(0b111 << shift))
+                            | ((SAMPLE_TIME_SLOW as u32) << shift),
+                    )
                 });
             }
             _ => {
                 let shift = ((channel as u32) - 10) * 3;
                 self.adc.spt1().modify(|r, w| unsafe {
-                    w.bits((r.bits() & !(0b111 << shift)) | ((SAMPLE_TIME_SLOW as u32) << shift))
+                    w.bits(
+                        (r.bits() & !(0b111 << shift))
+                            | ((SAMPLE_TIME_SLOW as u32) << shift),
+                    )
                 });
             }
         }

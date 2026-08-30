@@ -4,8 +4,12 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use embedded_graphics::text::Text;
 
-pub fn draw_outline<D>(target: &mut D, top_left: Point, size: Size, color: Rgb565)
-where
+pub fn draw_outline<D>(
+    target: &mut D,
+    top_left: Point,
+    size: Size,
+    color: Rgb565,
+) where
     D: DrawTarget<Color = Rgb565>,
 {
     let w = size.width as i32;
@@ -34,8 +38,13 @@ const BATTERY_H: i32 = 10;
 const BATTERY_NUB_W: i32 = 2;
 const BATTERY_SEGMENTS: i32 = 4;
 
-pub fn draw_battery<D>(target: &mut D, right_x: i32, y: i32, level: u8, color: Rgb565)
-where
+pub fn draw_battery<D>(
+    target: &mut D,
+    right_x: i32,
+    y: i32,
+    level: u8,
+    color: Rgb565,
+) where
     D: DrawTarget<Color = Rgb565>,
 {
     let x = right_x - BATTERY_W - BATTERY_NUB_W;
@@ -82,8 +91,13 @@ where
         .ok();
 }
 
-pub fn draw_vfo_marker<D>(target: &mut D, cx: i32, cy: i32, filled: bool, color: Rgb565)
-where
+pub fn draw_vfo_marker<D>(
+    target: &mut D,
+    cx: i32,
+    cy: i32,
+    filled: bool,
+    color: Rgb565,
+) where
     D: DrawTarget<Color = Rgb565>,
 {
     let r = 4;

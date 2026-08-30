@@ -57,7 +57,8 @@ mod enabled {
                 if prev.band != snap.band {
                     draw_header(lcd, app);
                 }
-                if (prev.status, prev.freq_hz, prev.tone) != (snap.status, snap.freq_hz, snap.tone)
+                if (prev.status, prev.freq_hz, prev.tone)
+                    != (snap.status, snap.freq_hz, snap.tone)
                 {
                     draw_content(lcd, app);
                 }

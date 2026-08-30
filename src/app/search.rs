@@ -215,8 +215,11 @@ mod enabled {
                 let rounded = (corrected + 13) / 25 * 25;
                 let clamped = clamp_band(app.search.band, rounded);
                 app.search.found_freq_word = clamped;
-                app.radio
-                    .tune_search_candidate(syst, clamped * 10, app.search.band.uhf_path());
+                app.radio.tune_search_candidate(
+                    syst,
+                    clamped * 10,
+                    app.search.band.uhf_path(),
+                );
                 app.radio.set_subaudio_scan_filter(syst, true);
                 app.search.phase = SearchPhase::ToneSetup;
             }
@@ -225,36 +228,44 @@ mod enabled {
                 app.search.tone = None;
                 app.search.phase = SearchPhase::ToneWait;
             }
-            SearchPhase::ToneWait => match app.radio.detect_subaudio_raw(syst) {
-                RawTone::None => {
-                    if app.search.timeout_ticks > 0 {
-                        app.search.timeout_ticks -= 1;
-                    } else {
+            SearchPhase::ToneWait => {
+                match app.radio.detect_subaudio_raw(syst) {
+                    RawTone::None => {
+                        if app.search.timeout_ticks > 0 {
+                            app.search.timeout_ticks -= 1;
+                        } else {
+                            app.search.phase = SearchPhase::Found;
+                        }
+                    }
+                    RawTone::Ctcss(raw) => {
+                        let tenths = radio::ctcss_raw_to_tenths_hz(raw);
+                        app.search.tone = radio::find_standard_ctcss(
+                            tenths,
+                            &settings::CTCSS_TABLE,
+                        )
+                        .map(SubAudio::Ctcss);
+                        app.search.phase = SearchPhase::Found;
+                    }
+                    RawTone::Dcs(raw) => {
+                        app.search.tone =
+                            radio::find_standard_dcs(raw, &settings::DCS_TABLE)
+                                .map(|code| SubAudio::Dcs {
+                                    code,
+                                    inverted: false,
+                                });
                         app.search.phase = SearchPhase::Found;
                     }
                 }
-                RawTone::Ctcss(raw) => {
-                    let tenths = radio::ctcss_raw_to_tenths_hz(raw);
-                    app.search.tone = radio::find_standard_ctcss(tenths, &settings::CTCSS_TABLE)
-                        .map(SubAudio::Ctcss);
-                    app.search.phase = SearchPhase::Found;
-                }
-                RawTone::Dcs(raw) => {
-                    app.search.tone =
-                        radio::find_standard_dcs(raw, &settings::DCS_TABLE).map(|code| {
-                            SubAudio::Dcs {
-                                code,
-                                inverted: false,
-                            }
-                        });
-                    app.search.phase = SearchPhase::Found;
-                }
-            },
+            }
             SearchPhase::Found => {}
         }
     }
 
-    pub(in super::super) fn dispatch(app: &mut App, syst: &mut SYST, ev: KeyEvent) {
+    pub(in super::super) fn dispatch(
+        app: &mut App,
+        syst: &mut SYST,
+        ev: KeyEvent,
+    ) {
         match (ev.kind, ev.key) {
             (KeyEventKind::Single, KeyId::Ab) => {
                 app.search.band = app.search.band.next();
@@ -265,10 +276,13 @@ mod enabled {
             {
                 app.search.phase = SearchPhase::Setup;
             }
-            (KeyEventKind::Single, KeyId::Menu) if app.search.phase == SearchPhase::Found => {
+            (KeyEventKind::Single, KeyId::Menu)
+                if app.search.phase == SearchPhase::Found =>
+            {
                 save(app, syst);
             }
-            (KeyEventKind::Single, KeyId::Exit) | (KeyEventKind::Long, KeyId::Exit) => {
+            (KeyEventKind::Single, KeyId::Exit)
+            | (KeyEventKind::Long, KeyId::Exit) => {
                 exit(app, syst);
             }
             _ => {}
@@ -282,8 +296,12 @@ mod enabled {
 
     pub(in super::super) fn status(app: &App) -> SearchStatus {
         match app.search.phase {
-            SearchPhase::Setup | SearchPhase::Hunt | SearchPhase::Check => SearchStatus::Hunting,
-            SearchPhase::ToneSetup | SearchPhase::ToneWait => SearchStatus::Listening,
+            SearchPhase::Setup | SearchPhase::Hunt | SearchPhase::Check => {
+                SearchStatus::Hunting
+            }
+            SearchPhase::ToneSetup | SearchPhase::ToneWait => {
+                SearchStatus::Listening
+            }
             SearchPhase::Found => SearchStatus::Found,
         }
     }
@@ -316,7 +334,12 @@ mod disabled {
         app.mode = Mode::Standby;
     }
 
-    pub(in super::super) fn dispatch(_app: &mut App, _syst: &mut SYST, _ev: KeyEvent) {}
+    pub(in super::super) fn dispatch(
+        _app: &mut App,
+        _syst: &mut SYST,
+        _ev: KeyEvent,
+    ) {
+    }
 
     pub(in super::super) fn poll(_app: &mut App, _syst: &mut SYST) {}
 

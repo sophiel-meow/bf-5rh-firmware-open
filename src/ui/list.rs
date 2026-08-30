@@ -63,7 +63,11 @@ struct SelRender {
     cursor: Option<usize>,
 }
 
-fn render_sel(source: &mut dyn ListSource, selected: usize, show_arrows: bool) -> SelRender {
+fn render_sel(
+    source: &mut dyn ListSource,
+    selected: usize,
+    show_arrows: bool,
+) -> SelRender {
     let mut value: TextBuf<VALUE_MAX> = TextBuf::new();
     let has_value = source.value(selected, &mut value);
     let cursor = if has_value {
@@ -126,7 +130,15 @@ pub(crate) fn draw_list<D>(
         if top != prev_top || total != prev_total {
             clear_body(lcd);
             for slot in 0..VISIBLE_ROWS {
-                draw_row(lcd, source, top + slot, selected, show_arrows, total, slot);
+                draw_row(
+                    lcd,
+                    source,
+                    top + slot,
+                    selected,
+                    show_arrows,
+                    total,
+                    slot,
+                );
             }
         } else if selected != prev_selected {
             draw_row(
@@ -275,9 +287,23 @@ fn draw_row<D>(
     if source.value(index, &mut value) {
         if let Some(cursor) = source.cursor(index) {
             if label_is_empty {
-                draw_value_with_cursor_left(lcd, value.as_str(), cursor, row_top, baseline, fg);
+                draw_value_with_cursor_left(
+                    lcd,
+                    value.as_str(),
+                    cursor,
+                    row_top,
+                    baseline,
+                    fg,
+                );
             } else {
-                draw_value_with_cursor(lcd, value.as_str(), cursor, row_top, baseline, fg);
+                draw_value_with_cursor(
+                    lcd,
+                    value.as_str(),
+                    cursor,
+                    row_top,
+                    baseline,
+                    fg,
+                );
             }
         } else if is_selected && show_arrows {
             draw_editing_value(lcd, value.as_str(), row_top, fg);
@@ -301,7 +327,8 @@ fn draw_centered<D>(lcd: &mut D, text: &str, baseline_y: i32)
 where
     D: DrawTarget<Color = Rgb565>,
 {
-    let width = text.chars().count() as i32 * FONT_6X10.character_size.width as i32;
+    let width =
+        text.chars().count() as i32 * FONT_6X10.character_size.width as i32;
     let x = (SCREEN_W - width) / 2;
     Text::new(
         text,
@@ -316,7 +343,8 @@ fn draw_value<D>(lcd: &mut D, text: &str, baseline_y: i32, fg: Rgb565)
 where
     D: DrawTarget<Color = Rgb565>,
 {
-    let width = text.chars().count() as i32 * FONT_6X10.character_size.width as i32;
+    let width =
+        text.chars().count() as i32 * FONT_6X10.character_size.width as i32;
     let x = SCREEN_W - RIGHT_MARGIN - width;
     Text::new(
         text,

@@ -29,7 +29,8 @@ use cortex_m::peripheral::SYST;
 
 const FIRMWARE_VERSION: &str = env!("GIT_VERSION");
 
-const STEP_LIST_DECI_HZ: [u32; 9] = [250, 500, 625, 1000, 1250, 2000, 2500, 5000, 10000];
+const STEP_LIST_DECI_HZ: [u32; 9] =
+    [250, 500, 625, 1000, 1250, 2000, 2500, 5000, 10000];
 const DEFAULT_STEP_INDEX: u8 = 3;
 
 const MAX_CHANNEL_NUM: u16 = 999;
@@ -61,7 +62,8 @@ pub fn rssi_raw_to_dbm(raw: u16) -> i32 {
 
 pub const BATTERY_CAL_REFERENCE_CV: u16 = 760;
 
-const VOX_THRESHOLD_TABLE: [u8; 11] = [127, 52, 62, 72, 84, 95, 106, 117, 125, 132, 140];
+const VOX_THRESHOLD_TABLE: [u8; 11] =
+    [127, 52, 62, 72, 84, 95, 106, 117, 125, 132, 140];
 const VOX_TX_HYSTERESIS: u8 = 8;
 const VOX_HOLD_AFTER_RX_TICKS: u8 = 150;
 const VOX_HOLD_AFTER_KEY_TICKS: u8 = 40;
@@ -244,8 +246,9 @@ impl<'a> App<'a> {
 
         if let Some(buf) = vfo_payload {
             for (half, s) in sides.iter_mut().enumerate() {
-                let bytes: [u8; addr::VFO_SIZE as usize] = buf
-                    [half * addr::VFO_SIZE as usize..(half + 1) * addr::VFO_SIZE as usize]
+                let bytes: [u8; addr::VFO_SIZE as usize] = buf[half
+                    * addr::VFO_SIZE as usize
+                    ..(half + 1) * addr::VFO_SIZE as usize]
                     .try_into()
                     .unwrap();
                 let vfo = flash_map::VfoMode::from_bytes(&bytes);
@@ -259,8 +262,11 @@ impl<'a> App<'a> {
         if let Some(state) = storage.load_channel_state() {
             for (half, s) in sides.iter_mut().enumerate() {
                 let is_channel = state[half * 3] != 0;
-                let num = u16::from_le_bytes([state[half * 3 + 1], state[half * 3 + 2]])
-                    .min(MAX_CHANNEL_NUM);
+                let num = u16::from_le_bytes([
+                    state[half * 3 + 1],
+                    state[half * 3 + 2],
+                ])
+                .min(MAX_CHANNEL_NUM);
                 if is_channel && !storage.is_channel_empty(num) {
                     let ch = storage.read_channel(num);
                     s.load_channel(num, &ch);
@@ -321,12 +327,15 @@ impl<'a> App<'a> {
             battery_sample_idx: 0,
             rssi_raw: 0,
             mic_level: 0,
-            channel_display_mode: channel_display_mode_from_u8(settings.channel_display_mode),
+            channel_display_mode: channel_display_mode_from_u8(
+                settings.channel_display_mode,
+            ),
             power_save: false,
             ps_asleep: false,
             ps_idle_ticks: POWER_SAVE_IDLE_TICKS,
             ps_cycle_ticks: 0,
-            bl_idle_ticks: settings.backlight_time as u16 * BACKLIGHT_STEP_TICKS,
+            bl_idle_ticks: settings.backlight_time as u16
+                * BACKLIGHT_STEP_TICKS,
             scan: scan::ScanState::new(),
             search: search::SearchState::new(),
             scanqt: scanqt::ScanQtState::new(),
@@ -350,7 +359,8 @@ impl<'a> App<'a> {
         if signal_present {
             self.last_signal_side = Some(self.watching);
         }
-        if !self.dual_standby || self.mode != Mode::Standby || self.transmitting {
+        if !self.dual_standby || self.mode != Mode::Standby || self.transmitting
+        {
             return;
         }
         if self.power_save {
@@ -396,14 +406,19 @@ impl<'a> App<'a> {
     }
 
     pub fn poll_power_save(&mut self, syst: &mut SYST) {
-        if self.settings.save_level == 0 || self.mode != Mode::Standby || self.transmitting {
+        if self.settings.save_level == 0
+            || self.mode != Mode::Standby
+            || self.transmitting
+        {
             if self.ps_idle_ticks != POWER_SAVE_IDLE_TICKS || self.ps_asleep {
                 self.note_power_save_activity(syst);
             }
             return;
         }
 
-        if !self.ps_asleep && (self.radio.rssi_open() || self.radio.audio_is_open()) {
+        if !self.ps_asleep
+            && (self.radio.rssi_open() || self.radio.audio_is_open())
+        {
             self.power_save = false;
             self.ps_idle_ticks = POWER_SAVE_IDLE_TICKS;
             self.ps_cycle_ticks = 0;
@@ -436,14 +451,15 @@ impl<'a> App<'a> {
             }
             self.radio.rf_sleep(syst);
             self.ps_asleep = true;
-            self.ps_cycle_ticks =
-                self.settings.save_level as u16 * POWER_SAVE_SLEEP_TICKS_PER_LEVEL;
+            self.ps_cycle_ticks = self.settings.save_level as u16
+                * POWER_SAVE_SLEEP_TICKS_PER_LEVEL;
         }
     }
 
     // backlight
     fn note_backlight_activity(&mut self) {
-        self.bl_idle_ticks = self.settings.backlight_time as u16 * BACKLIGHT_STEP_TICKS;
+        self.bl_idle_ticks =
+            self.settings.backlight_time as u16 * BACKLIGHT_STEP_TICKS;
     }
 
     pub fn poll_backlight(&mut self) {
@@ -456,7 +472,9 @@ impl<'a> App<'a> {
     }
 
     pub fn backlight_should_be_on(&self) -> bool {
-        self.transmitting || self.settings.backlight_time == 0 || self.bl_idle_ticks > 0
+        self.transmitting
+            || self.settings.backlight_time == 0
+            || self.bl_idle_ticks > 0
     }
 
     // persistence
@@ -566,7 +584,12 @@ impl<'a> App<'a> {
     }
 
     // VOX
-    pub fn poll_vox(&mut self, syst: &mut SYST, mic_level: u8, rx_active: bool) {
+    pub fn poll_vox(
+        &mut self,
+        syst: &mut SYST,
+        mic_level: u8,
+        rx_active: bool,
+    ) {
         if self.vox_det_dly > 0 {
             self.vox_det_dly -= 1;
         }
@@ -739,7 +762,11 @@ impl<'a> App<'a> {
         launcher::total_item_count()
     }
 
-    pub fn launcher_label_at(&mut self, index: usize, w: &mut dyn core::fmt::Write) {
+    pub fn launcher_label_at(
+        &mut self,
+        index: usize,
+        w: &mut dyn core::fmt::Write,
+    ) {
         launcher::label_at(self, index, w);
     }
 
@@ -754,7 +781,8 @@ impl<'a> App<'a> {
     /// Returns the currently selected setting item.
     /// Panics if at the top-level group selection screen.
     pub(super) fn current_setting_item(&self) -> settings::SettingItem {
-        self.settings_ui.group.expect("not at top level").items()[self.settings_ui.index]
+        self.settings_ui.group.expect("not at top level").items()
+            [self.settings_ui.index]
     }
 
     pub fn settings_title(&self) -> &'static str {
@@ -797,7 +825,11 @@ impl<'a> App<'a> {
         }
     }
 
-    pub fn settings_value_at(&self, index: usize, w: &mut dyn core::fmt::Write) -> bool {
+    pub fn settings_value_at(
+        &self,
+        index: usize,
+        w: &mut dyn core::fmt::Write,
+    ) -> bool {
         match self.settings_ui.group {
             Some(g) => {
                 settings_ops::value_text_for(self, index, g.items()[index], w);

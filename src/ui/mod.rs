@@ -30,7 +30,10 @@ where
         .ok();
 }
 
-pub(crate) fn tone_text<W: core::fmt::Write>(w: &mut W, tone: Option<SubAudio>) {
+pub(crate) fn tone_text<W: core::fmt::Write>(
+    w: &mut W,
+    tone: Option<SubAudio>,
+) {
     match tone {
         None | Some(SubAudio::None) => {
             let _ = write!(w, "NONE");
@@ -39,7 +42,8 @@ pub(crate) fn tone_text<W: core::fmt::Write>(w: &mut W, tone: Option<SubAudio>) 
             let _ = write!(w, "{}.{}Hz", hz / 10, hz % 10);
         }
         Some(SubAudio::Dcs { code, inverted }) => {
-            let _ = write!(w, "D{:03o}{}", code, if inverted { "I" } else { "N" });
+            let _ =
+                write!(w, "D{:03o}{}", code, if inverted { "I" } else { "N" });
         }
     }
 }
@@ -137,8 +141,12 @@ pub fn draw(
     }
     state.last_mode = Some(mode);
     match mode {
-        app::Mode::AppMenu => launcher::draw_app_menu(lcd, app, &mut state.list),
-        app::Mode::Settings => settings::draw_settings(lcd, app, &mut state.list),
+        app::Mode::AppMenu => {
+            launcher::draw_app_menu(lcd, app, &mut state.list)
+        }
+        app::Mode::Settings => {
+            settings::draw_settings(lcd, app, &mut state.list)
+        }
         app::Mode::Scan => scan::draw_scan(lcd, app, &mut state.scan),
         app::Mode::Search => search::draw_search(lcd, app, &mut state.search),
         app::Mode::ScanQt => scanqt::draw_scanqt(lcd, app, &mut state.scanqt),

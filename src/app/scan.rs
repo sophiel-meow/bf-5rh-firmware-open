@@ -36,7 +36,11 @@ impl ScanState {
     }
 }
 
-fn find_next_scan_channel(app: &mut App, from: u16, forward: bool) -> Option<u16> {
+fn find_next_scan_channel(
+    app: &mut App,
+    from: u16,
+    forward: bool,
+) -> Option<u16> {
     let mut n = from;
     for _ in 0..=MAX_CHANNEL_NUM {
         n = if forward {

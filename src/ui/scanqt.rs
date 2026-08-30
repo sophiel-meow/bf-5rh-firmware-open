@@ -50,7 +50,9 @@ where
                 clear_strip(lcd, FREQ_Y, FREQ_H);
                 draw_frequency(lcd, snap.freq_hz, 60);
             }
-            if (prev.found, prev.listening, prev.tone) != (snap.found, snap.listening, snap.tone) {
+            if (prev.found, prev.listening, prev.tone)
+                != (snap.found, snap.listening, snap.tone)
+            {
                 draw_status_line(lcd, app);
             }
         }

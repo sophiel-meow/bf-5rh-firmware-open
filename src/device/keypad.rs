@@ -176,14 +176,18 @@ impl<'a> Keypad<'a> {
         if raw == self.stable {
             if let Some(key) = self.stable {
                 self.hold_ticks += elapsed as u32;
-                if !self.long_fired && key.supports_long() && self.hold_ticks >= LONG_PRESS_TICKS {
+                if !self.long_fired
+                    && key.supports_long()
+                    && self.hold_ticks >= LONG_PRESS_TICKS
+                {
                     self.long_fired = true;
                     self.queue.push(KeyEvent {
                         key,
                         kind: KeyEventKind::Long,
                     });
                 }
-                if key.supports_repeat() && self.hold_ticks >= REPEAT_FIRE_TICKS {
+                if key.supports_repeat() && self.hold_ticks >= REPEAT_FIRE_TICKS
+                {
                     self.hold_ticks = REPEAT_RESET_TICKS;
                     self.queue.push(KeyEvent {
                         key,

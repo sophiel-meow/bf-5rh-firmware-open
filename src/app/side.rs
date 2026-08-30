@@ -1,4 +1,7 @@
-use super::{power_from_raw, power_to_raw, subaudio_from_code, subaudio_to_code, ChVfoMode};
+use super::{
+    power_from_raw, power_to_raw, subaudio_from_code, subaudio_to_code,
+    ChVfoMode,
+};
 use crate::device::radio::{ChannelConfig, Power, SubAudio};
 use crate::flash_map::{self, addr};
 
@@ -82,7 +85,8 @@ impl Side {
     }
 
     pub fn to_vfo_bytes(&self) -> [u8; addr::VFO_SIZE as usize] {
-        let mut vfo = flash_map::VfoMode::from_bytes(&[0u8; addr::VFO_SIZE as usize]);
+        let mut vfo =
+            flash_map::VfoMode::from_bytes(&[0u8; addr::VFO_SIZE as usize]);
         vfo.set_freq_deci_hz(self.rx_freq_hz / 10);
         vfo.set_offset_deci_hz(self.offset_hz / 10);
         vfo.set_wide_narrow(!self.cfg.wide_band);

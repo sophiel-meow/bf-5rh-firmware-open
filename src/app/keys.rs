@@ -3,8 +3,9 @@ use super::launcher::{self, LauncherEntry, STATIC_ITEMS};
 use super::settings;
 use super::settings_ops;
 use super::{
-    digit_value, App, ChVfoMode, DigitInput, Mode, BATTERY_CAL_REFERENCE_CV, CHANNEL_INPUT_DIGITS,
-    DUAL_STANDBY_HOLD_TICKS, RTONE_HZ_DIV_10, VFO_INPUT_DIGITS, VOX_HOLD_AFTER_KEY_TICKS,
+    digit_value, App, ChVfoMode, DigitInput, Mode, BATTERY_CAL_REFERENCE_CV,
+    CHANNEL_INPUT_DIGITS, DUAL_STANDBY_HOLD_TICKS, RTONE_HZ_DIV_10,
+    VFO_INPUT_DIGITS, VOX_HOLD_AFTER_KEY_TICKS,
 };
 use super::{scan, scanqt, search};
 use crate::device::keypad::{KeyEvent, KeyEventKind, KeyId};
@@ -26,7 +27,8 @@ pub(super) fn dispatch(app: &mut App, syst: &mut SYST, ev: KeyEvent) {
 
     if matches!(ev.key, KeyId::Side1 | KeyId::Side2 | KeyId::Band)
         && matches!(ev.kind, KeyEventKind::Press | KeyEventKind::Release)
-        && keyfn::from_u8(short_function(app, ev.key)) == keyfn::KeyFunction::TxTone
+        && keyfn::from_u8(short_function(app, ev.key))
+            == keyfn::KeyFunction::TxTone
     {
         dispatch_tx_tone(app, syst, ev);
         return;
@@ -109,7 +111,9 @@ fn dispatch_standby(app: &mut App, syst: &mut SYST, ev: KeyEvent) {
                 KeyId::Ab => app.switch_side(syst),
                 KeyId::Asterisk => app.dtmf_dial = Some(DigitInput::new()),
                 KeyId::Menu => {
-                    if app.sides[app.master].vfo_chan == ChVfoMode::Channel && app.input.len > 0 {
+                    if app.sides[app.master].vfo_chan == ChVfoMode::Channel
+                        && app.input.len > 0
+                    {
                         app.commit_input(syst);
                     } else {
                         enter_app_menu(app);
@@ -267,7 +271,12 @@ fn dispatch_settings(app: &mut App, syst: &mut SYST, ev: KeyEvent) {
                     && app.settings_ui.editing
                     && item.is_scalar() =>
             {
-                settings_ops::apply(app, syst, item, settings_ops::scalar_floor(item));
+                settings_ops::apply(
+                    app,
+                    syst,
+                    item,
+                    settings_ops::scalar_floor(item),
+                );
             }
             KeyId::Menu if ev.kind == KeyEventKind::Single => {
                 if !app.settings_ui.editing {
@@ -279,14 +288,16 @@ fn dispatch_settings(app: &mut App, syst: &mut SYST, ev: KeyEvent) {
                     } else if item == settings::SettingItem::BattCal {
                         app.settings_ui.battery_input.clear();
                     } else {
-                        app.settings_ui.snapshot = settings_ops::current_value(app, item);
+                        app.settings_ui.snapshot =
+                            settings_ops::current_value(app, item);
                     }
                     app.settings_ui.editing = true;
                 } else if item == settings::SettingItem::Reset {
                     settings_ops::factory_reset(app);
                 } else {
                     app.settings_ui.editing = false;
-                    if item != settings::SettingItem::Info && item != settings::SettingItem::ChipId
+                    if item != settings::SettingItem::Info
+                        && item != settings::SettingItem::ChipId
                     {
                         app.save_settings();
                     }
@@ -298,14 +309,23 @@ fn dispatch_settings(app: &mut App, syst: &mut SYST, ev: KeyEvent) {
                         && item != settings::SettingItem::ChipId
                         && item != settings::SettingItem::Reset
                     {
-                        settings_ops::apply(app, syst, item, app.settings_ui.snapshot);
+                        settings_ops::apply(
+                            app,
+                            syst,
+                            item,
+                            app.settings_ui.snapshot,
+                        );
                     }
                     app.settings_ui.editing = false;
                 } else {
                     let current = app.settings_ui.group;
                     app.settings_ui.group = None;
                     app.settings_ui.index = current
-                        .and_then(|g| settings::SETTINGS_GROUPS.iter().position(|&grp| grp == g))
+                        .and_then(|g| {
+                            settings::SETTINGS_GROUPS
+                                .iter()
+                                .position(|&grp| grp == g)
+                        })
                         .unwrap_or(0);
                 }
             }
@@ -397,7 +417,9 @@ fn dispatch_battery_input(app: &mut App, syst: &mut SYST, ev: KeyEvent) {
 fn commit_battery_input(app: &mut App, syst: &mut SYST) {
     let entered_cv = app.settings_ui.battery_input.value();
     let raw12 = app.battery_raw12_avg() as u32;
-    if let Some(new_cal) = (raw12 * BATTERY_CAL_REFERENCE_CV as u32).checked_div(entered_cv) {
+    if let Some(new_cal) =
+        (raw12 * BATTERY_CAL_REFERENCE_CV as u32).checked_div(entered_cv)
+    {
         settings_ops::apply(
             app,
             syst,

@@ -26,8 +26,12 @@ pub(super) fn subaudio_from_code(code: u16) -> SubAudio {
     match flash_map::SubaudioCode::decode(code) {
         flash_map::SubaudioCode::None => SubAudio::None,
         flash_map::SubaudioCode::Ctcss(t) => SubAudio::Ctcss(t),
-        flash_map::SubaudioCode::DcsNormal(idx) => dcs_from_table_index(idx, false),
-        flash_map::SubaudioCode::DcsInverted(idx) => dcs_from_table_index(idx - 105, true),
+        flash_map::SubaudioCode::DcsNormal(idx) => {
+            dcs_from_table_index(idx, false)
+        }
+        flash_map::SubaudioCode::DcsInverted(idx) => {
+            dcs_from_table_index(idx - 105, true)
+        }
     }
 }
 
@@ -124,7 +128,8 @@ pub(super) fn subaudio_from_index(v: i32) -> SubAudio {
             inverted: false,
         }
     } else {
-        let inv_v = (dcs_v - settings::DCS_TABLE.len()).min(settings::DCS_TABLE.len() - 1);
+        let inv_v = (dcs_v - settings::DCS_TABLE.len())
+            .min(settings::DCS_TABLE.len() - 1);
         SubAudio::Dcs {
             code: settings::DCS_TABLE[inv_v],
             inverted: true,
@@ -154,7 +159,13 @@ pub(super) fn subaudio_index(sub: SubAudio) -> i32 {
     }
 }
 
-pub(super) fn map(x: i32, in_min: i32, in_max: i32, out_min: i32, out_max: i32) -> i32 {
+pub(super) fn map(
+    x: i32,
+    in_min: i32,
+    in_max: i32,
+    out_min: i32,
+    out_max: i32,
+) -> i32 {
     (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
 }
 

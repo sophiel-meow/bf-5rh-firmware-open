@@ -83,7 +83,9 @@ pub(super) fn poll(app: &mut App, syst: &mut SYST) {
             match app.radio.detect_subaudio_raw(syst) {
                 // a single successful decode is trusted immediately, no repeat-agreement needed.
                 RawTone::Dcs(raw) => {
-                    if let Some(code) = radio::find_standard_dcs(raw, &settings::DCS_TABLE) {
+                    if let Some(code) =
+                        radio::find_standard_dcs(raw, &settings::DCS_TABLE)
+                    {
                         app.scanqt.tone = Some(SubAudio::Dcs {
                             code,
                             inverted: false,
@@ -93,7 +95,10 @@ pub(super) fn poll(app: &mut App, syst: &mut SYST) {
                 }
                 RawTone::Ctcss(raw) => {
                     let tenths = radio::ctcss_raw_to_tenths_hz(raw);
-                    match radio::find_standard_ctcss(tenths, &settings::CTCSS_TABLE) {
+                    match radio::find_standard_ctcss(
+                        tenths,
+                        &settings::CTCSS_TABLE,
+                    ) {
                         Some(hz) if app.scanqt.ctcss_candidate == Some(hz) => {
                             app.scanqt.hit_count += 1;
                             if app.scanqt.hit_count >= CTCSS_HIT_COUNT {
@@ -151,7 +156,9 @@ pub(super) fn dispatch(app: &mut App, syst: &mut SYST, ev: KeyEvent) {
             app.scanqt.phase = ScanQtPhase::WaitSquelch;
             app.radio.set_subaudio_scan_filter(syst, false);
         }
-        KeyId::Menu if app.scanqt.phase == ScanQtPhase::Found => save(app, syst),
+        KeyId::Menu if app.scanqt.phase == ScanQtPhase::Found => {
+            save(app, syst)
+        }
         KeyId::Exit => exit(app, syst),
         _ => {}
     }

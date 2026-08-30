@@ -1,9 +1,9 @@
 use super::keyfn;
 use super::settings::SettingItem;
 use super::{
-    channel_display_mode_from_u8, clamp_step, power_from_raw, power_to_raw, subaudio_from_index,
-    subaudio_index, wrap_step, App, ChVfoMode, Mode, FIRMWARE_VERSION, RTONE_HZ_DIV_10,
-    STEP_LIST_DECI_HZ, SUBAUDIO_MAX_INDEX,
+    channel_display_mode_from_u8, clamp_step, power_from_raw, power_to_raw,
+    subaudio_from_index, subaudio_index, wrap_step, App, ChVfoMode, Mode,
+    FIRMWARE_VERSION, RTONE_HZ_DIV_10, STEP_LIST_DECI_HZ, SUBAUDIO_MAX_INDEX,
 };
 use crate::device::radio::{BandLock, Power, RogerTone, SubAudio};
 use core::fmt::Write;
@@ -78,12 +78,19 @@ pub(super) fn current_value(app: &App, item: SettingItem) -> i32 {
     }
 }
 
-pub(super) fn adjust(app: &mut App, syst: &mut SYST, item: SettingItem, up: bool) {
+pub(super) fn adjust(
+    app: &mut App,
+    syst: &mut SYST,
+    item: SettingItem,
+    up: bool,
+) {
     let cur = current_value(app, item);
 
     let new_val = match item {
         SettingItem::Sql => clamp_step(cur, up, 0, 9),
-        SettingItem::Step => clamp_step(cur, up, 0, STEP_LIST_DECI_HZ.len() as i32 - 1),
+        SettingItem::Step => {
+            clamp_step(cur, up, 0, STEP_LIST_DECI_HZ.len() as i32 - 1)
+        }
         SettingItem::Tot => clamp_step(cur, up, 0, 12),
         SettingItem::Sftd => clamp_step(cur, up, 0, 2),
         SettingItem::Tdr
@@ -113,7 +120,9 @@ pub(super) fn adjust(app: &mut App, syst: &mut SYST, item: SettingItem, up: bool
             crate::flash_map::addr::CONTACT_COUNT as i32 - 1,
         ),
         SettingItem::TxPr | SettingItem::Roge => clamp_step(cur, up, 0, 2),
-        SettingItem::RxCts | SettingItem::TxCts => wrap_step(cur, up, -1, SUBAUDIO_MAX_INDEX),
+        SettingItem::RxCts | SettingItem::TxCts => {
+            wrap_step(cur, up, -1, SUBAUDIO_MAX_INDEX)
+        }
         SettingItem::Scrm => clamp_step(cur, up, 0, 3),
         SettingItem::AutoLk => clamp_step(cur, up, 0, 3),
         SettingItem::Vox => 1 - cur,
@@ -289,7 +298,12 @@ pub(super) fn apply(app: &mut App, syst: &mut SYST, item: SettingItem, v: i32) {
 }
 
 // UI getters
-pub fn value_text_for(app: &App, index: usize, item: SettingItem, w: &mut dyn Write) {
+pub fn value_text_for(
+    app: &App,
+    index: usize,
+    item: SettingItem,
+    w: &mut dyn Write,
+) {
     if item.is_placeholder() {
         let _ = write!(w, "----");
         return;
@@ -438,7 +452,12 @@ pub fn value_text_for(app: &App, index: usize, item: SettingItem, w: &mut dyn Wr
                     let _ = write!(w, "{}.{}Hz", hz / 10, hz % 10);
                 }
                 SubAudio::Dcs { code, inverted } => {
-                    let _ = write!(w, "D{:03o}{}", code, if inverted { "I" } else { "N" });
+                    let _ = write!(
+                        w,
+                        "D{:03o}{}",
+                        code,
+                        if inverted { "I" } else { "N" }
+                    );
                 }
             }
         }
@@ -455,7 +474,12 @@ pub fn value_text_for(app: &App, index: usize, item: SettingItem, w: &mut dyn Wr
                 app.settings_ui.offset_input.write_display(3, w);
             } else {
                 let hz = current_value(app, item) as u32;
-                let _ = write!(w, "{}.{:04}", hz / 1_000_000, (hz % 1_000_000) / 100);
+                let _ = write!(
+                    w,
+                    "{}.{:04}",
+                    hz / 1_000_000,
+                    (hz % 1_000_000) / 100
+                );
             }
         }
         SettingItem::ScanMd => {
