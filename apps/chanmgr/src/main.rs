@@ -155,7 +155,8 @@ impl Channel {
     }
 }
 
-const MULTITAP_TIMEOUT_TICKS: u16 = 60;
+/// Multi-tap accept delay, in 100us units (the `Tick` event's unit).
+const MULTITAP_TIMEOUT_100US: u32 = 8_000;
 
 const KEY_CHARS: [&[u8]; 10] = [
     b" ",
@@ -174,7 +175,7 @@ struct NameEdit<const N: usize> {
     buf: [u8; N],
     cursor: usize,
     pending: Option<(u8, usize)>,
-    idle_ticks: u16,
+    idle_100us: u32,
 }
 
 impl<const N: usize> NameEdit<N> {
@@ -183,7 +184,7 @@ impl<const N: usize> NameEdit<N> {
             buf: [0; N],
             cursor: 0,
             pending: None,
-            idle_ticks: 0,
+            idle_100us: 0,
         }
     }
 
@@ -191,7 +192,7 @@ impl<const N: usize> NameEdit<N> {
         self.buf = initial;
         self.cursor = initial.iter().position(|&b| b == 0).unwrap_or(N);
         self.pending = None;
-        self.idle_ticks = 0;
+        self.idle_100us = 0;
     }
 
     fn finalize_pending(&mut self) {
@@ -252,13 +253,13 @@ impl<const N: usize> NameEdit<N> {
                 }
             }
         }
-        self.idle_ticks = 0;
+        self.idle_100us = 0;
     }
 
-    fn tick(&mut self) {
+    fn tick(&mut self, dt_100us: u32) {
         if self.pending.is_some() {
-            self.idle_ticks += 1;
-            if self.idle_ticks >= MULTITAP_TIMEOUT_TICKS {
+            self.idle_100us += dt_100us;
+            if self.idle_100us >= MULTITAP_TIMEOUT_100US {
                 self.finalize_pending();
             }
         }
@@ -923,7 +924,7 @@ pub extern "C" fn app_entry(api: &Api, ev: AppEvent) -> AppResult {
     match ev {
         AppEvent::Enter => enter(api),
         AppEvent::Key { id, kind } => key(api, kind, id),
-        AppEvent::Tick { .. } => tick(api),
+        AppEvent::Tick { dt_100us } => tick(api, dt_100us),
         AppEvent::Draw => draw(api),
         AppEvent::Leave => AppResult::Continue,
     }
@@ -955,13 +956,13 @@ fn key(api: &Api, kind: u8, id: u8) -> AppResult {
     AppResult::Continue
 }
 
-fn tick(api: &Api) -> AppResult {
+fn tick(api: &Api, dt_100us: u32) -> AppResult {
     let _ = api;
     unsafe {
         let state = &mut *core::ptr::addr_of_mut!(STATE);
         if let Phase::Detail(edit) = &mut state.phase {
             if edit.editing && field_at(edit.field_index) == Field::Name {
-                edit.name_edit.tick();
+                edit.name_edit.tick(dt_100us);
             }
         }
     }

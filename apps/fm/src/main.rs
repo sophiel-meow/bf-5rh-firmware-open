@@ -20,7 +20,8 @@ const FREQ_INPUT_DIGITS: usize = 4;
 const CHANNEL_INPUT_DIGITS: usize = 2;
 const CHANNEL_COUNT: usize = 30;
 const CHANNEL_EMPTY: u16 = 0xFFFF;
-const SEEK_TIMEOUT_TICKS: u16 = 300;
+
+const SEEK_TIMEOUT_100US: u32 = 30_000;
 
 const BLACK: u16 = 0x0000;
 const WHITE: u16 = 0xFFFF;
@@ -60,7 +61,7 @@ enum Mode {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Tuning,
-    Seeking { timeout: u16 },
+    Seeking { remaining_100us: u32 },
     SavePicker { selected: u8 },
 }
 
@@ -119,7 +120,7 @@ pub extern "C" fn app_entry(api: &Api, ev: AppEvent) -> AppResult {
     match ev {
         AppEvent::Enter => enter(api),
         AppEvent::Key { id, kind } => key(api, id, kind),
-        AppEvent::Tick { .. } => tick(api),
+        AppEvent::Tick { dt_100us } => tick(api, dt_100us),
         AppEvent::Draw => draw(api),
         AppEvent::Leave => AppResult::Continue,
     }
@@ -254,7 +255,7 @@ fn start_seek(api: &Api, up: bool) {
     (api.fm_seek)(up);
     unsafe {
         STATE.phase = Phase::Seeking {
-            timeout: SEEK_TIMEOUT_TICKS,
+            remaining_100us: SEEK_TIMEOUT_100US,
         };
     }
 }
@@ -436,20 +437,19 @@ fn key(api: &Api, id: u8, kind: u8) -> AppResult {
     }
 }
 
-fn tick(api: &Api) -> AppResult {
+fn tick(api: &Api, dt_100us: u32) -> AppResult {
     let status = (api.fm_status)();
     let rssi = (status >> 8) as u8;
     unsafe {
         STATE.rssi = rssi;
     }
-    if let Phase::Seeking { timeout } = unsafe { STATE.phase } {
+    if let Phase::Seeking { remaining_100us } = unsafe { STATE.phase } {
         let complete = status & 1 != 0;
         let seek_failed = status & 2 != 0;
-        if !complete && !seek_failed && timeout > 0 {
+        let remaining_100us = remaining_100us.saturating_sub(dt_100us);
+        if !complete && !seek_failed && remaining_100us > 0 {
             unsafe {
-                STATE.phase = Phase::Seeking {
-                    timeout: timeout - 1,
-                };
+                STATE.phase = Phase::Seeking { remaining_100us };
             }
         } else {
             if !seek_failed {
