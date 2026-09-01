@@ -4,22 +4,14 @@ use super::{App, Mode};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LauncherEntry {
     Settings,
-    ScanQt,
-    Search,
 }
 
-pub const STATIC_ITEMS: &[LauncherEntry] = &[
-    LauncherEntry::Settings,
-    LauncherEntry::ScanQt,
-    LauncherEntry::Search,
-];
+pub const STATIC_ITEMS: &[LauncherEntry] = &[LauncherEntry::Settings];
 
 impl LauncherEntry {
     pub fn label(self) -> &'static str {
         match self {
             LauncherEntry::Settings => "SETTINGS",
-            LauncherEntry::ScanQt => "QT SCAN",
-            LauncherEntry::Search => "FREQ HUNT",
         }
     }
 
@@ -30,8 +22,6 @@ impl LauncherEntry {
     pub fn target_mode(self) -> Mode {
         match self {
             LauncherEntry::Settings => Mode::Settings,
-            LauncherEntry::ScanQt => Mode::ScanQt,
-            LauncherEntry::Search => Mode::Search,
         }
     }
 }

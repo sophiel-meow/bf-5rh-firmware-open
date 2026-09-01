@@ -156,6 +156,19 @@ pub struct Api {
     pub utc_set: extern "C" fn(secs: u32),
 
     pub set_backlight_hold: extern "C" fn(on: bool),
+
+    pub get_master_wide: extern "C" fn() -> bool,
+    pub squelch_open: extern "C" fn() -> bool,
+    pub set_subaudio_scan_filter: extern "C" fn(on: bool),
+    pub detect_subaudio: extern "C" fn() -> i32,
+    pub save_master_subaudio: extern "C" fn(code: u16, also_tx: bool),
+
+    pub freq_scan_enable: extern "C" fn(),
+    pub freq_scan_disable: extern "C" fn(),
+    pub check_freq_scan: extern "C" fn() -> u32,
+    pub correct_measured_freq_word: extern "C" fn(raw_word: u32) -> u32,
+    pub tune_search_candidate: extern "C" fn(freq_hz: u32, uhf_path: bool),
+    pub save_master_vfo: extern "C" fn(freq_hz: u32, subaudio_code: u16),
 }
 
 /// `settings_get(5)` / `settings_get(6)` when no position has been entered.

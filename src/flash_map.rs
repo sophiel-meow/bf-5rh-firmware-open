@@ -58,7 +58,7 @@ pub mod addr {
     /// 32KB each app package: up to `abi::MAX_SEGMENTS` (4) sub-programs
     /// of 8KB (`ARENA_SIZE`) each
     pub const OVERLAY_SLOT_SIZE: u32 = 32 * 1024;
-    pub const OVERLAY_SLOT_COUNT: u8 = 4;
+    pub const OVERLAY_SLOT_COUNT: u8 = 6;
 
     pub const fn overlay_slot_addr(slot: u8) -> u32 {
         OVERLAY_APP_ADDR + slot as u32 * OVERLAY_SLOT_SIZE

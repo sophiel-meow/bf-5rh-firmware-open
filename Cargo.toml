@@ -12,8 +12,7 @@ test = false
 bench = false
 
 [features]
-default = ["search"]
-search = []
+default = []
 
 [dependencies]
 cortex-m = "0.7"

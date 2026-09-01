@@ -16,8 +16,9 @@ use super::convert::{
     modulation_from_raw, power_from_raw, subaudio_from_code,
     subaudio_from_index, subaudio_index, subaudio_to_code,
 };
-use super::{App, Mode};
+use super::{settings, App, ChVfoMode, Mode};
 use crate::device::keypad::KeyEvent;
+use crate::device::radio::{self, RawTone, SubAudio};
 use crate::drivers::st7735::{St7735, HEIGHT, WIDTH};
 use crate::flash_map::addr;
 use crate::ui::{draw_list as draw_list_widget, Cache, ListSource};
@@ -1154,6 +1155,104 @@ extern "C" fn api_app_fault(line: u32) -> ! {
     SCB::sys_reset();
 }
 
+#[inline(never)]
+extern "C" fn api_get_master_wide() -> bool {
+    let app = app_ref();
+    app.side_wide_band(app.master_index())
+}
+
+#[inline(never)]
+extern "C" fn api_squelch_open() -> bool {
+    app_ref().rssi_open()
+}
+
+#[inline(never)]
+extern "C" fn api_set_subaudio_scan_filter(on: bool) {
+    let (app, syst) = (app_ref(), syst_ref());
+    app.radio_mut().set_subaudio_scan_filter(syst, on);
+}
+
+#[inline(never)]
+extern "C" fn api_detect_subaudio() -> i32 {
+    let (app, syst) = (app_ref(), syst_ref());
+    match app.radio_mut().detect_subaudio_raw(syst) {
+        RawTone::None => -1,
+        RawTone::Ctcss(raw) => {
+            let tenths = radio::ctcss_raw_to_tenths_hz(raw);
+            match radio::find_standard_ctcss(tenths, &settings::CTCSS_TABLE) {
+                Some(hz) => subaudio_index(SubAudio::Ctcss(hz)),
+                None => -2,
+            }
+        }
+        RawTone::Dcs(raw) => {
+            match radio::find_standard_dcs(raw, &settings::DCS_TABLE) {
+                Some(code) => subaudio_index(SubAudio::Dcs {
+                    code,
+                    inverted: false,
+                }),
+                None => -2,
+            }
+        }
+    }
+}
+
+#[inline(never)]
+extern "C" fn api_save_master_subaudio(code: u16, also_tx: bool) {
+    let app = app_ref();
+    let sub = subaudio_from_code(code);
+    let m = app.master_index();
+    app.sides[m].cfg.subaudio_rx = sub;
+    if also_tx {
+        app.sides[m].cfg.subaudio_tx = sub;
+    }
+    if matches!(app.sides[m].vfo_chan, ChVfoMode::Vfo) {
+        app.save_vfo();
+    }
+}
+
+#[inline(never)]
+extern "C" fn api_freq_scan_enable() {
+    let (app, syst) = (app_ref(), syst_ref());
+    app.radio_mut().freq_scan_enable(syst);
+}
+
+#[inline(never)]
+extern "C" fn api_freq_scan_disable() {
+    let (app, syst) = (app_ref(), syst_ref());
+    app.radio_mut().freq_scan_disable(syst);
+}
+
+#[inline(never)]
+extern "C" fn api_check_freq_scan() -> u32 {
+    let (app, syst) = (app_ref(), syst_ref());
+    app.radio_mut().check_freq_scan(syst).unwrap_or(u32::MAX)
+}
+
+#[inline(never)]
+extern "C" fn api_correct_measured_freq_word(raw_word: u32) -> u32 {
+    app_ref().radio.correct_measured_freq_word(raw_word)
+}
+
+#[inline(never)]
+extern "C" fn api_tune_search_candidate(freq_hz: u32, uhf_path: bool) {
+    let (app, syst) = (app_ref(), syst_ref());
+    app.radio_mut().tune_search_candidate(syst, freq_hz, uhf_path);
+}
+
+#[inline(never)]
+extern "C" fn api_save_master_vfo(freq_hz: u32, subaudio_code: u16) {
+    let app = app_ref();
+    let sub = subaudio_from_code(subaudio_code);
+    let m = app.master_index();
+    let s = &mut app.sides[m];
+    s.vfo_chan = ChVfoMode::Vfo;
+    s.rx_freq_hz = freq_hz;
+    s.cfg.subaudio_rx = sub;
+    s.cfg.subaudio_tx = sub;
+    s.refresh_cfg_freqs();
+    app.save_vfo();
+}
+
 static API: Api = Api {
     uptime_100us: api_uptime_100us,
     delay_ms: api_delay_ms,
@@ -1209,4 +1308,15 @@ static API: Api = Api {
     utc_get: api_utc_get,
     utc_set: api_utc_set,
     set_backlight_hold: api_set_backlight_hold,
+    get_master_wide: api_get_master_wide,
+    squelch_open: api_squelch_open,
+    set_subaudio_scan_filter: api_set_subaudio_scan_filter,
+    detect_subaudio: api_detect_subaudio,
+    save_master_subaudio: api_save_master_subaudio,
+    freq_scan_enable: api_freq_scan_enable,
+    freq_scan_disable: api_freq_scan_disable,
+    check_freq_scan: api_check_freq_scan,
+    correct_measured_freq_word: api_correct_measured_freq_word,
+    tune_search_candidate: api_tune_search_candidate,
+    save_master_vfo: api_save_master_vfo,
 };

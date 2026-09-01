@@ -32,19 +32,19 @@ pub const SEG_TRACK: u8 = 2;
 
 /// Satellite records, written by the host.
 /// 5120 B, so this spans **two** 4 KB sectors. the next free sector is
-/// 0x16E000, not 0x16D000.
-pub const SAT_TABLE_ADDR: u32 = 0x16C000;
+/// 0x17E000, not 0x17D000.
+pub const SAT_TABLE_ADDR: u32 = 0x17C000;
 pub const RECORD_SIZE: usize = 256;
 pub const MAX_SATELLITES: usize = 20;
 
 pub const RECORD_VERSION: u8 = 1;
 
 /// Persistent app state: the UTC date
-pub const STATE_ADDR: u32 = 0x16E000;
+pub const STATE_ADDR: u32 = 0x17E000;
 /// Prediction output: the combined pass table, one entry per kept pass across
 /// every satellite.
-pub const RESULT_ADDR: u32 = 0x16F000;
-pub const CALIB_ADDR: u32 = 0x170000;
+pub const RESULT_ADDR: u32 = 0x17F000;
+pub const CALIB_ADDR: u32 = 0x180000;
 
 pub const SECTOR_SIZE: u32 = 4096;
 

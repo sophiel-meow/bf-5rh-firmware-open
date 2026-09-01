@@ -6,8 +6,6 @@ mod launcher;
 pub(crate) mod name_edit;
 pub(crate) mod overlay;
 mod scan;
-mod scanqt;
-mod search;
 mod settings;
 mod settings_ops;
 mod side;
@@ -79,8 +77,6 @@ pub enum Mode {
     AppMenu,
     Settings,
     Scan,
-    Search,
-    ScanQt,
     /// running external app from spi flash
     External(u8),
 }
@@ -89,15 +85,6 @@ pub enum Mode {
 enum ChVfoMode {
     Vfo,
     Channel,
-}
-
-/// Search mode's coarse status, for the standby-adjacent UI screens (the
-/// full state machine lives in `search`, private to this module).
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum SearchStatus {
-    Hunting,
-    Listening,
-    Found,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -169,8 +156,6 @@ pub struct App<'a> {
     bl_idle_ticks: u16,
 
     scan: scan::ScanState,
-    search: search::SearchState,
-    scanqt: scanqt::ScanQtState,
 
     /// fm radio chip drvier
     /// keep for overlay::api_fm_*
@@ -343,8 +328,6 @@ impl<'a> App<'a> {
             bl_idle_ticks: settings.backlight_time as u16
                 * BACKLIGHT_STEP_TICKS,
             scan: scan::ScanState::new(),
-            search: search::SearchState::new(),
-            scanqt: scanqt::ScanQtState::new(),
             fm_radio,
             utc_secs: bf5rh_abi::UTC_NOT_SET,
             utc_frac: 0,
@@ -979,35 +962,8 @@ impl<'a> App<'a> {
     pub fn poll_scan(&mut self, syst: &mut SYST) {
         scan::poll(self, syst);
     }
-    pub fn poll_search(&mut self, syst: &mut SYST) {
-        search::poll(self, syst);
-    }
-    pub fn poll_scanqt(&mut self, syst: &mut SYST) {
-        scanqt::poll(self, syst);
-    }
     pub fn scan_direction_up(&self) -> bool {
         scan::direction_up(self)
-    }
-    pub fn search_band_label(&self) -> &'static str {
-        search::band_label(self)
-    }
-    pub fn search_status(&self) -> SearchStatus {
-        search::status(self)
-    }
-    pub fn search_candidate_freq_hz(&self) -> u32 {
-        search::candidate_freq_hz(self)
-    }
-    pub fn search_tone(&self) -> Option<SubAudio> {
-        search::tone(self)
-    }
-    pub fn scanqt_is_found(&self) -> bool {
-        scanqt::is_found(self)
-    }
-    pub fn scanqt_is_listening(&self) -> bool {
-        scanqt::is_listening(self)
-    }
-    pub fn scanqt_tone(&self) -> Option<SubAudio> {
-        scanqt::tone(self)
     }
     pub fn rssi_open(&self) -> bool {
         self.radio.rssi_open()

@@ -359,8 +359,6 @@ fn main() -> ! {
             app.poll_backlight();
             app.poll_blink();
             app.poll_scan(&mut cp.SYST);
-            app.poll_search(&mut cp.SYST);
-            app.poll_scanqt(&mut cp.SYST);
 
             if !app.power_save_active() {
                 let mic = app.radio_mut().read_mic_level(&mut cp.SYST);
