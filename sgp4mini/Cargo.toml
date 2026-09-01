@@ -1,0 +1,18 @@
+[workspace]
+
+[package]
+name = "sgp4mini"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+[dev-dependencies]
+sgp4 = "2.4.0"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = true
+panic = "abort"

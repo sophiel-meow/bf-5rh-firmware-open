@@ -9,6 +9,7 @@ use super::{
 };
 use super::{scan, scanqt, search};
 use crate::device::keypad::{KeyEvent, KeyEventKind, KeyId};
+use crate::flash_map;
 use cortex_m::peripheral::SYST;
 
 // top-level dispatch
@@ -248,6 +249,15 @@ fn dispatch_settings(app: &mut App, syst: &mut SYST, ev: KeyEvent) {
         dispatch_battery_input(app, syst, ev);
         return;
     }
+    if app.settings_ui.editing
+        && matches!(
+            item,
+            settings::SettingItem::Lat | settings::SettingItem::Lon
+        )
+    {
+        dispatch_coord_input(app, syst, item == settings::SettingItem::Lat, ev);
+        return;
+    }
 
     match ev.kind {
         KeyEventKind::Single | KeyEventKind::Repeat => match ev.key {
@@ -287,6 +297,16 @@ fn dispatch_settings(app: &mut App, syst: &mut SYST, ev: KeyEvent) {
                         app.settings_ui.offset_input.clear();
                     } else if item == settings::SettingItem::BattCal {
                         app.settings_ui.battery_input.clear();
+                    } else if item == settings::SettingItem::Lat {
+                        app.settings_ui.lat_input.clear();
+                        let v = app.settings.obs_lat;
+                        app.settings_ui.lat_neg =
+                            v != flash_map::COORD_NOT_SET && v < 0;
+                    } else if item == settings::SettingItem::Lon {
+                        app.settings_ui.lon_input.clear();
+                        let v = app.settings.obs_lon;
+                        app.settings_ui.lon_neg =
+                            v != flash_map::COORD_NOT_SET && v < 0;
                     } else {
                         app.settings_ui.snapshot =
                             settings_ops::current_value(app, item);
@@ -389,6 +409,83 @@ fn commit_offset_input(app: &mut App, syst: &mut SYST) {
         app.save_settings();
     }
     app.settings_ui.offset_input.clear();
+    app.settings_ui.editing = false;
+}
+
+/// Observer position entry, decimal degrees: `DD.DDDD` for latitude and
+/// `DDD.DDDD` for longitude, with `*` toggling the hemisphere.
+fn dispatch_coord_input(
+    app: &mut App,
+    syst: &mut SYST,
+    is_lat: bool,
+    ev: KeyEvent,
+) {
+    if ev.kind != KeyEventKind::Single {
+        return;
+    }
+    if let Some(digit) = digit_value(ev.key) {
+        if is_lat {
+            app.settings_ui.lat_input.push(digit);
+        } else {
+            app.settings_ui.lon_input.push(digit);
+        }
+        return;
+    }
+    let empty = if is_lat {
+        app.settings_ui.lat_input.is_empty()
+    } else {
+        app.settings_ui.lon_input.is_empty()
+    };
+    match ev.key {
+        KeyId::Asterisk => {
+            if is_lat {
+                app.settings_ui.lat_neg = !app.settings_ui.lat_neg;
+            } else {
+                app.settings_ui.lon_neg = !app.settings_ui.lon_neg;
+            }
+        }
+        KeyId::Menu => commit_coord_input(app, syst, is_lat),
+        KeyId::Exit if empty => app.settings_ui.editing = false,
+        KeyId::Exit => {
+            if is_lat {
+                app.settings_ui.lat_input.backspace();
+            } else {
+                app.settings_ui.lon_input.backspace();
+            }
+        }
+        _ => {}
+    }
+}
+
+fn commit_coord_input(app: &mut App, syst: &mut SYST, is_lat: bool) {
+    // The four typed decimals are 1e-4 degrees; the stored unit is 1e-5.
+    let (typed, degrees, limit, neg, item) = if is_lat {
+        (
+            !app.settings_ui.lat_input.is_empty(),
+            app.settings_ui.lat_input.value(),
+            90_00000,
+            app.settings_ui.lat_neg,
+            settings::SettingItem::Lat,
+        )
+    } else {
+        (
+            !app.settings_ui.lon_input.is_empty(),
+            app.settings_ui.lon_input.value(),
+            180_00000,
+            app.settings_ui.lon_neg,
+            settings::SettingItem::Lon,
+        )
+    };
+    if typed {
+        let mag = (degrees as i32).saturating_mul(10).min(limit);
+        settings_ops::apply(app, syst, item, if neg { -mag } else { mag });
+        app.save_settings();
+    }
+    if is_lat {
+        app.settings_ui.lat_input.clear();
+    } else {
+        app.settings_ui.lon_input.clear();
+    }
     app.settings_ui.editing = false;
 }
 

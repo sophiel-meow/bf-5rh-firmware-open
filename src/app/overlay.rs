@@ -338,7 +338,11 @@ fn leave_app(app: &mut App, syst: &mut SYST) {
         ARENA_EXT = 0;
     }
     app.mode = Mode::AppMenu;
-    unsafe { APP_TX_ENABLED = false };
+    unsafe {
+        APP_TX_ENABLED = false;
+        APP_HOLDS_RX = false;
+        APP_BACKLIGHT_HOLD = false;
+    }
     if app.is_transmitting() {
         app.set_ptt(syst, false);
     }
@@ -368,6 +372,10 @@ fn handle_result(app: &mut App, syst: &mut SYST, result: AppResult) {
             }
         };
 
+        if app_holds_rx() {
+            app.radio_mut().stop_for_app(syst);
+        }
+
         match load_segment(app, slot, seg) {
             Ok(entry) => unsafe {
                 LOADED_ENTRY = Some(entry);
@@ -376,6 +384,8 @@ fn handle_result(app: &mut App, syst: &mut SYST, result: AppResult) {
                 // Per segment, not per app: the tracking segment may key the
                 // transmitter, the editor it chains back to may not.
                 APP_TX_ENABLED = false;
+                APP_HOLDS_RX = false;
+                APP_BACKLIGHT_HOLD = false;
             },
             Err(e) => {
                 unsafe { LAST_LOAD_ERR = load_err_code(&e) };
@@ -398,8 +408,13 @@ pub(crate) fn enter(app: &mut App, syst: &mut SYST, slot: u8) {
                 LIST_CACHE = None;
                 HANDOFF_LEN = 0;
                 APP_TX_ENABLED = false;
+                APP_HOLDS_RX = false;
+                APP_BACKLIGHT_HOLD = false;
             }
             app.mode = Mode::External(slot);
+
+            // stop standby
+            app.radio_mut().stop_for_app(syst);
             let result = enter_call(app, syst);
             handle_result(app, syst, result);
         }
@@ -816,8 +831,18 @@ extern "C" fn api_settings_get(id: u16) -> u32 {
         2 => s.vox_switch as u32,
         3 => s.vox_level as u32,
         4 => s.beeps_switch as u32,
+        5 => s.obs_lat as u32,
+        6 => s.obs_lon as u32,
         _ => 0,
     }
+}
+
+extern "C" fn api_utc_get() -> u32 {
+    app_ref().utc_secs()
+}
+
+extern "C" fn api_utc_set(secs: u32) {
+    app_ref().set_utc_secs(secs);
 }
 
 static mut LIST_CACHE: Option<Cache> = None;
@@ -1052,6 +1077,7 @@ extern "C" fn api_set_monitor(on: bool) {
 #[inline(never)]
 extern "C" fn api_enter_rx() {
     let (app, syst) = (app_ref(), syst_ref());
+    unsafe { APP_HOLDS_RX = true };
     app.radio_mut().enter_rx(syst);
 }
 
@@ -1098,6 +1124,22 @@ pub(super) fn tx_enabled() -> bool {
 #[inline(never)]
 extern "C" fn api_set_tx_enabled(on: bool) {
     unsafe { APP_TX_ENABLED = on };
+}
+
+static mut APP_HOLDS_RX: bool = false;
+static mut APP_BACKLIGHT_HOLD: bool = false;
+
+pub(crate) fn app_holds_rx() -> bool {
+    unsafe { core::ptr::read(core::ptr::addr_of!(APP_HOLDS_RX)) }
+}
+
+pub(crate) fn backlight_hold() -> bool {
+    unsafe { core::ptr::read(core::ptr::addr_of!(APP_BACKLIGHT_HOLD)) }
+}
+
+#[inline(never)]
+extern "C" fn api_set_backlight_hold(on: bool) {
+    unsafe { APP_BACKLIGHT_HOLD = on };
 }
 
 #[inline(never)]
@@ -1164,4 +1206,7 @@ static API: Api = Api {
     adjust_rf_gain: api_adjust_rf_gain,
     tx_state: api_tx_state,
     set_tx_enabled: api_set_tx_enabled,
+    utc_get: api_utc_get,
+    utc_set: api_utc_set,
+    set_backlight_hold: api_set_backlight_hold,
 };

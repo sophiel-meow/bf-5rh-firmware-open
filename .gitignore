@@ -3,6 +3,10 @@
 *.bin
 *.BF
 *.app
+*.sat
 /apps/*/target
+/apps/*/*/target
+/sgp4mini/target
+/tools/mkrecord/target
 /tools/__pycache__
 

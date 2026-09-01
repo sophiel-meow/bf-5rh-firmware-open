@@ -74,6 +74,17 @@ pub mod addr {
 
 pub const FIRST_BOOT_MAGIC: [u8; 4] = *b"AURA";
 
+/// A coordinate outside its legal range is not a coordinate. Erased flash
+/// reads back as `-1`, which would otherwise look like a position 0.00001
+/// south of the equator.
+const fn coord_or_unset(v: i32, limit: i32) -> i32 {
+    if v >= -limit && v <= limit {
+        v
+    } else {
+        COORD_NOT_SET
+    }
+}
+
 fn digits_to_deci_hz(digits: &[u8]) -> u32 {
     digits.iter().fold(0u32, |acc, &d| acc * 10 + d as u32)
 }
@@ -454,10 +465,18 @@ pub struct Settings {
     pub boot_display_mode: u8,
     /// Forced off whenever `boot_display_mode` is 0.
     pub boot_sound_enabled: bool,
+    /// Observer position, units of 1e-5 degrees (about 1.1 m), north and east
+    /// positive. `COORD_NOT_SET` until the user enters one
+    pub obs_lat: i32,
+    pub obs_lon: i32,
 }
 
+/// `obs_lat`/`obs_lon` value meaning "the user has not set a position".
+/// Out of range for both, so it can never collide with a real coordinate.
+pub const COORD_NOT_SET: i32 = i32::MAX;
+
 /// Size of the serialised Settings record in bytes.
-pub const SETTINGS_BYTES: usize = 32;
+pub const SETTINGS_BYTES: usize = 40;
 
 impl Settings {
     pub const DEFAULT: Settings = Settings {
@@ -492,6 +511,8 @@ impl Settings {
         band_lock: 0,
         boot_display_mode: 2,
         boot_sound_enabled: false,
+        obs_lat: COORD_NOT_SET,
+        obs_lon: COORD_NOT_SET,
     };
 
     pub fn from_bytes(buf: &[u8; SETTINGS_BYTES]) -> Settings {
@@ -527,6 +548,14 @@ impl Settings {
             band_lock: buf[29].min(9),
             boot_display_mode: buf[30].min(3),
             boot_sound_enabled: buf[31] != 0,
+            obs_lat: coord_or_unset(
+                i32::from_le_bytes([buf[32], buf[33], buf[34], buf[35]]),
+                90_00000,
+            ),
+            obs_lon: coord_or_unset(
+                i32::from_le_bytes([buf[36], buf[37], buf[38], buf[39]]),
+                180_00000,
+            ),
         }
     }
 
@@ -563,6 +592,8 @@ impl Settings {
         buf[29] = self.band_lock;
         buf[30] = self.boot_display_mode;
         buf[31] = self.boot_sound_enabled as u8;
+        buf[32..36].copy_from_slice(&self.obs_lat.to_le_bytes());
+        buf[36..40].copy_from_slice(&self.obs_lon.to_le_bytes());
         buf
     }
 

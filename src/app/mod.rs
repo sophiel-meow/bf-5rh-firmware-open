@@ -175,6 +175,12 @@ pub struct App<'a> {
     /// fm radio chip drvier
     /// keep for overlay::api_fm_*
     fm_radio: FmRadio<'a>,
+
+    /// UTC seconds since 2000-01-01T00:00:00Z, `abi::UTC_NOT_SET` until
+    /// somebody sets it
+    utc_secs: u32,
+    /// 10ms ticks not yet carried into `utc_secs`.
+    utc_frac: u16,
 }
 
 impl<'a> App<'a> {
@@ -340,6 +346,31 @@ impl<'a> App<'a> {
             search: search::SearchState::new(),
             scanqt: scanqt::ScanQtState::new(),
             fm_radio,
+            utc_secs: bf5rh_abi::UTC_NOT_SET,
+            utc_frac: 0,
+        }
+    }
+
+    // UTC wall clock
+    pub fn utc_secs(&self) -> u32 {
+        self.utc_secs
+    }
+
+    pub fn set_utc_secs(&mut self, secs: u32) {
+        self.utc_secs = secs;
+        self.utc_frac = 0;
+    }
+
+    /// `ticks` is 10ms units, same cadence as `poll_tot`. An unset clock stays
+    /// unset rather than counting up from the epoch.
+    pub fn poll_clock(&mut self, ticks: u16) {
+        if self.utc_secs == bf5rh_abi::UTC_NOT_SET {
+            return;
+        }
+        self.utc_frac += ticks;
+        while self.utc_frac >= 100 {
+            self.utc_frac -= 100;
+            self.utc_secs = self.utc_secs.wrapping_add(1);
         }
     }
 

@@ -73,6 +73,8 @@ pub(super) fn current_value(app: &App, item: SettingItem) -> i32 {
         SettingItem::BootSnd => app.settings.boot_sound_enabled as i32,
         SettingItem::BattCal => app.settings.battery_cal_raw as i32,
         SettingItem::FLock => app.settings.band_lock as i32,
+        SettingItem::Lat => app.settings.obs_lat,
+        SettingItem::Lon => app.settings.obs_lon,
         SettingItem::Info => app.settings_ui.info_page as i32,
         _ => 0,
     }
@@ -280,6 +282,8 @@ pub(super) fn apply(app: &mut App, syst: &mut SYST, item: SettingItem, v: i32) {
         }
         SettingItem::BootSnd => app.settings.boot_sound_enabled = v != 0,
         SettingItem::BattCal => app.settings.battery_cal_raw = v as u16,
+        SettingItem::Lat => app.settings.obs_lat = v,
+        SettingItem::Lon => app.settings.obs_lon = v,
         SettingItem::FLock => {
             app.settings.band_lock = v as u8;
             app.radio
@@ -467,6 +471,43 @@ pub fn value_text_for(
                 let _ = write!(w, "OFF");
             } else {
                 let _ = write!(w, "{}", v);
+            }
+        }
+        SettingItem::Lat | SettingItem::Lon => {
+            let is_lat = item == SettingItem::Lat;
+            if app.settings_ui.is_editing(index) {
+                let neg = if is_lat {
+                    app.settings_ui.lat_input.write_display(2, w);
+                    app.settings_ui.lat_neg
+                } else {
+                    app.settings_ui.lon_input.write_display(3, w);
+                    app.settings_ui.lon_neg
+                };
+                let _ = w.write_char(match (is_lat, neg) {
+                    (true, false) => 'N',
+                    (true, true) => 'S',
+                    (false, false) => 'E',
+                    (false, true) => 'W',
+                });
+            } else {
+                let v = current_value(app, item);
+                if v == crate::flash_map::COORD_NOT_SET {
+                    let _ = write!(w, "----");
+                    return;
+                }
+                let av = v.unsigned_abs();
+                let _ = write!(
+                    w,
+                    "{}.{:04}{}",
+                    av / 100_000,
+                    (av % 100_000) / 10,
+                    match (is_lat, v < 0) {
+                        (true, false) => 'N',
+                        (true, true) => 'S',
+                        (false, false) => 'E',
+                        (false, true) => 'W',
+                    }
+                );
             }
         }
         SettingItem::Offse => {

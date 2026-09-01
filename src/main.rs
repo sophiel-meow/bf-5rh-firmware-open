@@ -340,12 +340,17 @@ fn main() -> ! {
             real_tick10_last =
                 real_tick10_last.wrapping_add(n10.wrapping_mul(100));
             app.poll_tot(&mut cp.SYST, n10);
+            app.poll_clock(n10);
             app.poll_no_channels_notice(n10);
         }
 
+        let running_app = matches!(app.mode(), app::Mode::External(_));
+
         if fast_tick % 5 == 0 {
             let rx_active = app.rssi_open() || app.audio_open();
-            if !app.is_transmitting() {
+            if !app.is_transmitting()
+                && (!running_app || app::overlay::app_holds_rx())
+            {
                 app.poll_squelch(&mut cp.SYST, 2);
             }
             app.poll_dual_standby(&mut cp.SYST, rx_active);
@@ -373,11 +378,17 @@ fn main() -> ! {
 
             board::set_rx_led(&dp.gpioa, rx_active && !app.is_transmitting());
             board::set_tx_led(&dp.gpioa, app.is_transmitting());
-            backlight_set(&dp.gpioa, app.backlight_should_be_on());
+            backlight_set(
+                &dp.gpioa,
+                app.backlight_should_be_on() || app::overlay::backlight_hold(),
+            );
         }
 
         if fast_tick % 15 == 0 {
-            if !app.is_transmitting() && !app.power_save_is_asleep() {
+            if !app.is_transmitting()
+                && !app.power_save_is_asleep()
+                && !running_app
+            {
                 let rssi = app.radio_mut().rssi(&mut cp.SYST);
                 app.set_rssi_raw(rssi as u8);
             }

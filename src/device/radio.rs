@@ -301,6 +301,8 @@ pub struct Radio<'a> {
     audio_open: bool,
     sq_debounce: u8,
 
+    rf_parked: bool,
+
     rssi_open: bool,
     rssi_debounce: u8,
 
@@ -339,6 +341,7 @@ impl<'a> Radio<'a> {
             rit_offset_hz: 0,
             audio_open: false,
             sq_debounce: 0,
+            rf_parked: false,
             rssi_open: false,
             rssi_debounce: 0,
             tx_state: false,
@@ -541,6 +544,10 @@ impl<'a> Radio<'a> {
     pub fn play_beep(&mut self, syst: &mut SYST) {
         if !self.beeps_enabled || self.audio_open {
             return;
+        }
+        if self.rf_parked {
+            self.fd6818.wake(syst);
+            self.rf_parked = false;
         }
         self.play_tone_sequence(syst, &BEEP_TONES, false, true);
     }
@@ -761,6 +768,22 @@ impl<'a> Radio<'a> {
         self.audio_open
     }
 
+    pub fn stop_for_app(&mut self, syst: &mut SYST) {
+        self.fd6818.set_af_out(
+            syst,
+            AfOutState::Mute,
+            self.cfg.wide_band,
+            self.cfg.modulation,
+        );
+        self.audio_open = false;
+        self.sq_debounce = 0;
+        self.rssi_open = false;
+        self.rssi_debounce = 0;
+        board::set_rx_led(self.gpioa, false);
+        self.set_speaker(false);
+        self.rf_sleep(syst);
+    }
+
     pub fn rssi(&mut self, syst: &mut SYST) -> u16 {
         self.fd6818.get_rssi(syst)
     }
@@ -783,6 +806,7 @@ impl<'a> Radio<'a> {
         self.fd6818.pa_off(syst);
         self.fd6818.set_tx_band_off(syst);
         self.fd6818.power_rx(syst);
+        self.rf_parked = false;
         self.fd6818.set_scramble(syst, self.scramble_level);
         let tuned_freq_hz = if matches!(
             self.cfg.modulation,
@@ -843,6 +867,7 @@ impl<'a> Radio<'a> {
         self.fd6818.rf_off(syst);
         self.fd6818.idle(syst);
         self.fd6818.wake(syst);
+        self.rf_parked = false;
         self.fd6818.set_frequency_hz(syst, self.cfg.tx_freq_hz);
         self.fd6818.set_wide_bandwidth(syst, self.cfg.wide_band);
         self.fd6818.set_subaudio_tx(syst, self.cfg.subaudio_tx);
@@ -877,6 +902,7 @@ impl<'a> Radio<'a> {
 
     pub fn rf_sleep(&mut self, syst: &mut SYST) {
         self.fd6818.sleep(syst);
+        self.rf_parked = true;
     }
 
     pub fn tune_search_candidate(

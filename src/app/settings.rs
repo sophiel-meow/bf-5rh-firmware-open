@@ -39,6 +39,8 @@ pub enum SettingItem {
     BootSnd,
     BattCal,
     FLock,
+    Lat,
+    Lon,
     Info,
     ChipId,
     Reset,
@@ -118,6 +120,8 @@ impl SettingsGroup {
             SettingsGroup::Ani => &[SettingItem::AniTx, SettingItem::AniCall],
             SettingsGroup::System => &[
                 SettingItem::FLock,
+                SettingItem::Lat,
+                SettingItem::Lon,
                 SettingItem::BattCal,
                 SettingItem::BootMode,
                 SettingItem::BootSnd,
@@ -171,6 +175,8 @@ impl SettingItem {
             SettingItem::BootSnd => "BOOTSND",
             SettingItem::BattCal => "BATCAL",
             SettingItem::FLock => "FLOCK",
+            SettingItem::Lat => "LAT",
+            SettingItem::Lon => "LON",
             SettingItem::Info => "VER",
             SettingItem::ChipId => "CHIPID",
             SettingItem::Reset => "RESET",
@@ -186,6 +192,8 @@ impl SettingItem {
             self,
             SettingItem::Offse
                 | SettingItem::BattCal
+                | SettingItem::Lat
+                | SettingItem::Lon
                 | SettingItem::Info
                 | SettingItem::ChipId
                 | SettingItem::Reset
@@ -243,6 +251,13 @@ pub(super) struct SettingsUi {
     /// voltage (1 integer digit + 2 decimals, e.g. "742" = 7.42V) instead of
     /// adjusting the raw ADC calibration value directly with Up/Down.
     pub(super) battery_input: DigitInput<3>,
+    /// Observer latitude, decimal degrees `DD.DDDD`.
+    pub(super) lat_input: DigitInput<6>,
+    /// Observer longitude, decimal degrees `DDD.DDDD`.
+    pub(super) lon_input: DigitInput<7>,
+    /// Hemisphere, toggled with `*`: false = N/E, true = S/W.
+    pub(super) lat_neg: bool,
+    pub(super) lon_neg: bool,
 }
 
 impl SettingsUi {
@@ -255,6 +270,10 @@ impl SettingsUi {
             info_page: 0,
             offset_input: DigitInput::new(),
             battery_input: DigitInput::new(),
+            lat_input: DigitInput::new(),
+            lon_input: DigitInput::new(),
+            lat_neg: false,
+            lon_neg: false,
         }
     }
 

@@ -94,6 +94,10 @@ pub struct Api {
     /// cooy 32B raw channel (`flash_map::Channel::to_bytes`) to out
     /// return `false` when empty or out-of-bounds
     pub chan_read: extern "C" fn(num: u16, out: *mut u8, out_len: u16) -> bool,
+    /// `0` sql, `1` tot, `2` vox on, `3` vox level, `4` beep,
+    /// `5` observer latitude, `6` observer longitude. The two coordinates are
+    /// `i32` bit patterns in units of 1e-5 degrees (north/east positive), and
+    /// `SETTING_COORD_NOT_SET` when the user has not entered a position.
     pub settings_get: extern "C" fn(id: u16) -> u32,
 
     /// fault
@@ -145,7 +149,19 @@ pub struct Api {
     /// Loading an app, and every segment switch, resets this to `false`, so an
     /// app that never calls it cannot transmit at all
     pub set_tx_enabled: extern "C" fn(on: bool),
+
+    /// UTC wall clock, seconds since 2000-01-01T00:00:00Z, or
+    /// `UTC_NOT_SET` when nobody has set it since power-on
+    pub utc_get: extern "C" fn() -> u32,
+    pub utc_set: extern "C" fn(secs: u32),
+
+    pub set_backlight_hold: extern "C" fn(on: bool),
 }
+
+/// `settings_get(5)` / `settings_get(6)` when no position has been entered.
+pub const SETTING_COORD_NOT_SET: i32 = i32::MAX;
+/// `utc_get()` before anyone has set the clock.
+pub const UTC_NOT_SET: u32 = 0;
 
 #[repr(C)]
 pub enum AppEvent {

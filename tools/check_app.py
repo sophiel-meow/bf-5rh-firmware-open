@@ -1,6 +1,5 @@
 import argparse
 import re
-import struct
 import subprocess
 import sys
 import zlib
@@ -8,20 +7,9 @@ from pathlib import Path
 
 import mkapp
 
-HEADER_FMT = mkapp.HEADER_FMT
-HEADER_SIZE = mkapp.HEADER_SIZE
-
 
 def run(cmd, **kw):
     return subprocess.run(cmd, check=True, capture_output=True, text=True, **kw)
-
-
-def arena_size(fw_root: Path) -> int:
-    lib_rs = (fw_root / "abi" / "src" / "lib.rs").read_text()
-    m = re.search(r"pub const ARENA_SIZE:\s*usize\s*=\s*(\d+)", lib_rs)
-    if not m:
-        sys.exit("[ERR] missing ARENA_SIZE")
-    return int(m.group(1))
 
 
 def real_arena_address(fw_root: Path) -> int:
@@ -33,7 +21,7 @@ def real_arena_address(fw_root: Path) -> int:
     memory_x.write_text(widened)
     try:
         subprocess.run(["cargo", "build", "--release"], cwd=fw_root, check=True)
-        elf = fw_root / "target" / "thumbv7em-none-eabihf" / "release" / "bf5rh-fw"
+        elf = fw_root / "target" / "thumbv7em-none-eabi" / "release" / "bf5rh-fw"
         out = run(["rust-nm", str(elf)]).stdout
         for line in out.splitlines():
             if line.strip().endswith("overlay5ARENA") or "7overlay5ARENA" in line:
@@ -50,98 +38,107 @@ def check_relocations(elf: Path) -> tuple[bool, str]:
     return True, "relocation ok"
 
 
-def check_origin(app_dir: Path, fw_root: Path) -> tuple[bool, str]:
-    declared = mkapp.arena_origin(app_dir)
+def check_origin(app_dirs: list[Path], fw_root: Path) -> tuple[bool, str]:
     actual = real_arena_address(fw_root)
-    if declared != actual:
-        return (
-            False,
-            f"app.x wrong: ORIGIN=0x{declared:X}, should be: ARENA=0x{actual:X}",
-        )
-    return True, f"ORIGIN=0x{declared:X} correct"
+    bad = [d for d in app_dirs if mkapp.arena_origin(d) != actual]
+    if bad:
+        names = ", ".join(f"{d.name}=0x{mkapp.arena_origin(d):X}" for d in bad)
+        return False, f"app.x wrong: {names}, should be ARENA=0x{actual:X}"
+    return True, f"ORIGIN=0x{actual:X} correct"
 
 
 def check_size(header: dict, fw_root: Path) -> tuple[bool, str]:
-    limit = arena_size(fw_root)
-    total = header["image_len"] + header["bss_len"]
-    if total > limit:
-        return False, f"image_len+bss_len={total}B over ARENA_SIZE={limit}B"
-    return True, f"{total}B / {limit}B"
+    limit = mkapp.arena_size(fw_root)
+    limit_max = mkapp.arena_max(fw_root)
+    slot = mkapp.slot_size(fw_root)
+    parts = []
+    ok = header["size"] <= slot
+    for i, seg in enumerate(header["segments"]):
+        total = seg["image_len"] + seg["bss_len"]
+        ok = ok and total <= limit_max
+        tag = " oversized" if total > limit else ""
+        parts.append(f"seg{i}={total}B{tag}")
+    return ok, (
+        f"{', '.join(parts)} (each / {limit}B, oversized / {limit_max}B), "
+        f"package={header['size']}B / {slot}B"
+    )
+
+
+def check_crc(header: dict) -> tuple[bool, str]:
+    data = header["data"]
+    for i, seg in enumerate(header["segments"]):
+        start = seg["offset"]
+        end = start + seg["image_len"]
+        if end > len(data):
+            return False, f"seg{i} runs past end of file"
+        crc = zlib.crc32(data[start:end]) & 0xFFFFFFFF
+        if crc != seg["crc32"]:
+            return False, f"seg{i} crc 0x{crc:08X} != header 0x{seg['crc32']:08X}"
+    return True, f"{len(header['segments'])} segment(s) ok"
 
 
 def check_build_hash(header: dict, fw_root: Path) -> tuple[bool, str]:
     expected = mkapp.build_hash(fw_root)
     if header["build_hash"] != expected:
         return False, (
-            f"app header hash 0x{header['build_hash']:08X}"
+            f"app header hash 0x{header['build_hash']:08X} "
             f"should be: 0x{expected:08X}"
         )
     return True, f"0x{expected:08X}"
 
 
-def parse_header(app_path: Path) -> dict:
-    data = app_path.read_bytes()[:HEADER_SIZE]
-    magic, build_hash, image_len, bss_len, entry_off, crc32, name = struct.unpack(
-        HEADER_FMT, data
-    )
-    return {
-        "magic": magic,
-        "build_hash": build_hash,
-        "image_len": image_len,
-        "bss_len": bss_len,
-        "entry_off": entry_off,
-        "crc32": crc32,
-        "name": name.rstrip(b"\0").decode("ascii", "replace"),
-    }
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
-        "target",
+        "targets",
         type=Path,
-        help="app crate dir or .app file",
+        nargs="+",
+        help="app crate dirs (repacked first) or one .app file",
     )
-    ap.add_argument(
-        "--skip-origin",
-        action="store_true",
-        help="skip origin check",
-    )
+    ap.add_argument("-o", "--out", type=Path, help=".app path, when packing")
+    ap.add_argument("--skip-origin", action="store_true", help="skip origin check")
     ap.add_argument("--name", help="for mkapp.py")
     args = ap.parse_args()
 
-    target = args.target.resolve()
-    if target.is_dir():
-        app_dir = target
-        app_path = app_dir.with_suffix(".app")
-        mkapp.pack(app_dir, app_path, args.name)
+    targets = [t.resolve() for t in args.targets]
+    if targets[0].is_dir():
+        app_dirs = targets
+        app_path = args.out.resolve() if args.out else mkapp.default_out(app_dirs)
+        mkapp.pack(app_dirs, app_path, args.name)
     else:
-        app_path = target
-        app_dir = None
+        if len(targets) != 1:
+            sys.exit("[ERR] pass exactly one .app file")
+        app_dirs = []
+        app_path = targets[0]
 
-    fw_root = mkapp.find_repo_root(app_dir) if app_dir else target.parent.parent
-    header = parse_header(app_path)
-    print(f"[..] name={header['name']!r}")
+    fw_root = mkapp.find_repo_root(app_dirs[0]) if app_dirs else app_path.parent.parent
+    header = mkapp.parse_header(app_path)
+    print(f"[..] name={header['name']!r} segments={header['segment_count']}")
 
-    results = []
     if header["magic"] != mkapp.MAGIC:
         print(f"[FAIL] wrong magic: {header['magic']!r}")
         return 1
+    if not 1 <= header["segment_count"] <= mkapp.MAX_SEGMENTS:
+        print(f"[FAIL] segment_count={header['segment_count']}")
+        return 1
 
-    results.append(("build_hash ok", check_build_hash(header, fw_root)))
-    results.append(("size ok", check_size(header, fw_root)))
+    results = [
+        ("build_hash ok", check_build_hash(header, fw_root)),
+        ("size ok", check_size(header, fw_root)),
+        ("crc ok", check_crc(header)),
+    ]
 
-    if app_dir is not None:
-        bin_name = app_dir.name
-        elf = app_dir / "target" / "thumbv7em-none-eabihf" / "release" / bin_name
-        results.append(("relocations ok", check_relocations(elf)))
+    if app_dirs:
+        for d in app_dirs:
+            results.append(
+                (f"{d.name} relocations ok", check_relocations(mkapp.elf_path(d)))
+            )
         if not args.skip_origin:
-            results.append(("ORIGIN ok", check_origin(app_dir, fw_root)))
+            results.append(("ORIGIN ok", check_origin(app_dirs, fw_root)))
 
     ok = True
     for name, (passed, detail) in results:
-        mark = "OK  " if passed else "FAIL"
-        print(f"[{mark}] {name}: {detail}")
+        print(f"[{'OK  ' if passed else 'FAIL'}] {name}: {detail}")
         ok = ok and passed
 
     return 0 if ok else 1
