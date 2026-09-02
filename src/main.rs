@@ -240,15 +240,10 @@ fn main() -> ! {
         "sclk={SCLK_HZ}Hz (HEXT+PLL, 16MHz crystal) baud={BAUD} div={div}"
     );
 
-    // LCD init only -- the old Phase-1 "Hello, World!" smoke-test draw
-    // (fill_screen + a test Text) lived here before the app/ui layer existed,
-    // but `ui::draw` repaints the whole screen from `app` state on the very
-    // first tick, so that one-shot test draw was pure flash-budget cost (this
-    // board's 60K usable flash has none to spare, see `memory.x`).
     let mut display = device::display::Display::new(&dp.gpiob, &dp.spi2);
     display.init(&mut cp.SYST);
+    ui::boot::clear(display.as_draw_target());
     let backlight = device::display::Backlight::new(&dp.gpioa);
-    backlight.on();
     dbg_println!(serial, "lcd: init done");
 
     let mut rfic = Fd6818::new(&dp.gpioa, &dp.gpioc);
@@ -315,6 +310,59 @@ fn main() -> ! {
         &mut cp.SYST,
     );
     app.init_battery_samples();
+
+    let boot_mode = app.settings().boot_display_mode;
+    match boot_mode {
+        1 => {
+            let cv = app.battery_voltage_cv();
+            ui::boot::draw_voltage(display.as_draw_target(), cv);
+        }
+        2 => {
+            ui::boot::draw_message(display.as_draw_target(), app.settings());
+        }
+        3 => {
+            let width = flash_map::BOOT_LOGO_WIDTH as u32;
+            let rows = flash_map::BOOT_LOGO_HEIGHT / ui::boot::LOGO_CHUNK_ROWS;
+            for band in 0..rows {
+                let y0 = band * ui::boot::LOGO_CHUNK_ROWS;
+                let mut chunk = [0u8; ui::boot::LOGO_CHUNK_BYTES];
+                app.storage_mut().read_raw(
+                    flash_map::addr::BOOT_LOGO_ADDR
+                        + y0 as u32 * width * 2,
+                    &mut chunk,
+                );
+                ui::boot::draw_logo_chunk(display.as_draw_target(), y0, &chunk);
+            }
+        }
+        // 0 = None: screen is already cleared black from just after
+        // `display.init()`, nothing more to draw.
+        _ => {}
+    }
+
+    backlight.on();
+
+    if boot_mode != 0 {
+        if app.settings().boot_sound_enabled {
+            let tune = app.settings().boot_tune;
+            app.radio_mut().play_boot_tune(&mut cp.SYST, &tune, |_| {
+                board::read_power_key(&dp.gpiob)
+            });
+        }
+
+        let mut remaining_ms: u32 = 1000;
+        while remaining_ms > 0 {
+            check_power_off(
+                &dp.gpiob,
+                &dp.gpiof,
+                &mut serial,
+                &mut app,
+                &mut cp.SYST,
+            );
+            delay_ms(30);
+            remaining_ms = remaining_ms.saturating_sub(30);
+        }
+    }
+
     let mut ui_state = ui::UiState::new();
 
     let mut fast_tick: u32 = 0;

@@ -51,6 +51,8 @@ pub mod addr {
 
     pub const SYSTEMRAN_ADDR: u32 = 0xE000;
 
+    pub const BOOT_LOGO_ADDR: u32 = 0x000C_0000;
+
     /// external app overlay: 720KB total
     /// after voice prompt
     pub const OVERLAY_APP_ADDR: u32 = 0x14C000;
@@ -58,7 +60,7 @@ pub mod addr {
     /// 32KB each app package: up to `abi::MAX_SEGMENTS` (4) sub-programs
     /// of 8KB (`ARENA_SIZE`) each
     pub const OVERLAY_SLOT_SIZE: u32 = 32 * 1024;
-    pub const OVERLAY_SLOT_COUNT: u8 = 6;
+    pub const OVERLAY_SLOT_COUNT: u8 = 8;
 
     pub const fn overlay_slot_addr(slot: u8) -> u32 {
         OVERLAY_APP_ADDR + slot as u32 * OVERLAY_SLOT_SIZE
@@ -73,6 +75,11 @@ pub mod addr {
 }
 
 pub const FIRST_BOOT_MAGIC: [u8; 4] = *b"AURA";
+
+pub const BOOT_LOGO_WIDTH: u16 = 160;
+pub const BOOT_LOGO_HEIGHT: u16 = 128;
+pub const BOOT_LOGO_SIZE: usize =
+    BOOT_LOGO_WIDTH as usize * BOOT_LOGO_HEIGHT as usize * 2;
 
 /// A coordinate outside its legal range is not a coordinate. Erased flash
 /// reads back as `-1`, which would otherwise look like a position 0.00001
@@ -465,6 +472,11 @@ pub struct Settings {
     pub boot_display_mode: u8,
     /// Forced off whenever `boot_display_mode` is 0.
     pub boot_sound_enabled: bool,
+
+    pub boot_text_line1: [u8; 16],
+    pub boot_text_line2: [u8; 16],
+    /// OpenGD77-compatible boot melody: 48 `(tone_index, duration)` pairs
+    pub boot_tune: [(u8, u8); 48],
     /// Observer position, units of 1e-5 degrees (about 1.1 m), north and east
     /// positive. `COORD_NOT_SET` until the user enters one
     pub obs_lat: i32,
@@ -476,7 +488,18 @@ pub struct Settings {
 pub const COORD_NOT_SET: i32 = i32::MAX;
 
 /// Size of the serialised Settings record in bytes.
-pub const SETTINGS_BYTES: usize = 40;
+pub const SETTINGS_BYTES: usize = 168;
+
+const fn default_boot_tune() -> [(u8, u8); 48] {
+    let mut t = [(0u8, 0u8); 48];
+    t[0] = (1, 4); // A2  110Hz
+    t[1] = (13, 4); // A3  220Hz
+    t[2] = (20, 4); // E4  330Hz
+    t[3] = (25, 4); // A4  440Hz
+    t[4] = (32, 4); // E5  660Hz
+    t[5] = (37, 10); // A5  880Hz, landing note
+    t
+}
 
 impl Settings {
     pub const DEFAULT: Settings = Settings {
@@ -511,6 +534,9 @@ impl Settings {
         band_lock: 0,
         boot_display_mode: 2,
         boot_sound_enabled: false,
+        boot_text_line1: [0; 16],
+        boot_text_line2: [0; 16],
+        boot_tune: default_boot_tune(),
         obs_lat: COORD_NOT_SET,
         obs_lon: COORD_NOT_SET,
     };
@@ -556,6 +582,23 @@ impl Settings {
                 i32::from_le_bytes([buf[36], buf[37], buf[38], buf[39]]),
                 180_00000,
             ),
+            boot_text_line1: {
+                let mut l = [0u8; 16];
+                l.copy_from_slice(&buf[40..56]);
+                l
+            },
+            boot_text_line2: {
+                let mut l = [0u8; 16];
+                l.copy_from_slice(&buf[56..72]);
+                l
+            },
+            boot_tune: {
+                let mut t = [(0u8, 0u8); 48];
+                for (i, pair) in t.iter_mut().enumerate() {
+                    *pair = (buf[72 + i * 2], buf[72 + i * 2 + 1]);
+                }
+                t
+            },
         }
     }
 
@@ -594,6 +637,12 @@ impl Settings {
         buf[31] = self.boot_sound_enabled as u8;
         buf[32..36].copy_from_slice(&self.obs_lat.to_le_bytes());
         buf[36..40].copy_from_slice(&self.obs_lon.to_le_bytes());
+        buf[40..56].copy_from_slice(&self.boot_text_line1);
+        buf[56..72].copy_from_slice(&self.boot_text_line2);
+        for (i, &(tone, duration)) in self.boot_tune.iter().enumerate() {
+            buf[72 + i * 2] = tone;
+            buf[72 + i * 2 + 1] = duration;
+        }
         buf
     }
 

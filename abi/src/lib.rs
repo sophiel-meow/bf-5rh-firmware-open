@@ -95,9 +95,10 @@ pub struct Api {
     /// return `false` when empty or out-of-bounds
     pub chan_read: extern "C" fn(num: u16, out: *mut u8, out_len: u16) -> bool,
     /// `0` sql, `1` tot, `2` vox on, `3` vox level, `4` beep,
-    /// `5` observer latitude, `6` observer longitude. The two coordinates are
-    /// `i32` bit patterns in units of 1e-5 degrees (north/east positive), and
-    /// `SETTING_COORD_NOT_SET` when the user has not entered a position.
+    /// `5` observer latitude, `6` observer longitude, `7` chip id. The two
+    /// coordinates are `i32` bit patterns in units of 1e-5 degrees
+    /// (north/east positive), and `SETTING_COORD_NOT_SET` when the user has
+    /// not entered a position.
     pub settings_get: extern "C" fn(id: u16) -> u32,
 
     /// fault
@@ -169,6 +170,15 @@ pub struct Api {
     pub correct_measured_freq_word: extern "C" fn(raw_word: u32) -> u32,
     pub tune_search_candidate: extern "C" fn(freq_hz: u32, uhf_path: bool),
     pub save_master_vfo: extern "C" fn(freq_hz: u32, subaudio_code: u16),
+
+    // settings app
+    pub settings_read: extern "C" fn(buf: *mut u8, len: u16) -> bool,
+    pub settings_preview: extern "C" fn(buf: *const u8, len: u16) -> bool,
+    pub settings_commit: extern "C" fn(buf: *const u8, len: u16) -> bool,
+    pub side_cfg_read: extern "C" fn(buf: *mut u8, len: u16) -> bool,
+    pub side_cfg_write: extern "C" fn(buf: *const u8, len: u16) -> bool,
+    pub factory_reset: extern "C" fn() -> !,
+    pub battery_raw12_avg: extern "C" fn() -> u16,
 }
 
 /// `settings_get(5)` / `settings_get(6)` when no position has been entered.

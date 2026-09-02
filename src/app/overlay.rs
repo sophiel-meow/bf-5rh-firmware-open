@@ -13,7 +13,7 @@ use embedded_graphics::primitives::{Circle, Line, PrimitiveStyle, Rectangle};
 use embedded_graphics::text::Text;
 
 use super::convert::{
-    modulation_from_raw, power_from_raw, subaudio_from_code,
+    modulation_from_raw, power_from_raw, power_to_raw, subaudio_from_code,
     subaudio_from_index, subaudio_index, subaudio_to_code,
 };
 use super::{settings, App, ChVfoMode, Mode};
@@ -825,7 +825,8 @@ extern "C" fn api_chan_read(num: u16, out: *mut u8, out_len: u16) -> bool {
 
 #[inline(never)]
 extern "C" fn api_settings_get(id: u16) -> u32 {
-    let s = &app_ref().settings;
+    let app = app_ref();
+    let s = &app.settings;
     match id {
         0 => s.sql_level as u32,
         1 => s.tot_level as u32,
@@ -834,6 +835,7 @@ extern "C" fn api_settings_get(id: u16) -> u32 {
         4 => s.beeps_switch as u32,
         5 => s.obs_lat as u32,
         6 => s.obs_lon as u32,
+        7 => app.chip_id() as u32,
         _ => 0,
     }
 }
@@ -1236,7 +1238,8 @@ extern "C" fn api_correct_measured_freq_word(raw_word: u32) -> u32 {
 #[inline(never)]
 extern "C" fn api_tune_search_candidate(freq_hz: u32, uhf_path: bool) {
     let (app, syst) = (app_ref(), syst_ref());
-    app.radio_mut().tune_search_candidate(syst, freq_hz, uhf_path);
+    app.radio_mut()
+        .tune_search_candidate(syst, freq_hz, uhf_path);
 }
 
 #[inline(never)]
@@ -1251,6 +1254,132 @@ extern "C" fn api_save_master_vfo(freq_hz: u32, subaudio_code: u16) {
     s.cfg.subaudio_tx = sub;
     s.refresh_cfg_freqs();
     app.save_vfo();
+}
+
+const SETTINGS_BYTES: usize = crate::flash_map::SETTINGS_BYTES;
+
+#[inline(never)]
+extern "C" fn api_settings_read(buf: *mut u8, len: u16) -> bool {
+    if buf.is_null() || (len as usize) < SETTINGS_BYTES {
+        return false;
+    }
+    let bytes = app_ref().settings.to_bytes();
+    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len()) };
+    true
+}
+
+fn settings_from_wire(
+    buf: *const u8,
+    len: u16,
+) -> Option<crate::flash_map::Settings> {
+    if buf.is_null() || (len as usize) < SETTINGS_BYTES {
+        return None;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(buf, SETTINGS_BYTES) };
+    let mut arr = [0u8; SETTINGS_BYTES];
+    arr.copy_from_slice(bytes);
+    Some(crate::flash_map::Settings::from_bytes(&arr))
+}
+
+#[inline(never)]
+extern "C" fn api_settings_preview(buf: *const u8, len: u16) -> bool {
+    let Some(settings) = settings_from_wire(buf, len) else {
+        return false;
+    };
+    let (app, syst) = (app_ref(), syst_ref());
+    app.settings = settings;
+    app.apply_settings_to_hw(syst);
+    true
+}
+
+#[inline(never)]
+extern "C" fn api_settings_commit(buf: *const u8, len: u16) -> bool {
+    if !api_settings_preview(buf, len) {
+        return false;
+    }
+    let app = app_ref();
+    let settings = app.settings;
+    app.storage_mut().save_settings(&settings);
+    true
+}
+
+const SIDE_CFG_BYTES: usize = 14;
+
+#[inline(never)]
+extern "C" fn api_side_cfg_read(buf: *mut u8, len: u16) -> bool {
+    if buf.is_null() || (len as usize) < SIDE_CFG_BYTES {
+        return false;
+    }
+    let app = app_ref();
+    let s = &app.sides[app.master_index()];
+    let mut out = [0u8; SIDE_CFG_BYTES];
+    out[0] = s.cfg.wide_band as u8;
+    out[1] = power_to_raw(s.cfg.power);
+    out[2..4]
+        .copy_from_slice(&subaudio_to_code(s.cfg.subaudio_rx).to_le_bytes());
+    out[4..6]
+        .copy_from_slice(&subaudio_to_code(s.cfg.subaudio_tx).to_le_bytes());
+    let (dir, offset) = s.shift_dir_offset();
+    out[6] = dir;
+    out[7..11].copy_from_slice(&offset.to_le_bytes());
+    let ani: i16 = s.ani_target.map_or(-1, |t| t as i16);
+    out[11..13].copy_from_slice(&ani.to_le_bytes());
+    out[13] = s.freq_step;
+    unsafe { core::ptr::copy_nonoverlapping(out.as_ptr(), buf, out.len()) };
+    true
+}
+
+#[inline(never)]
+extern "C" fn api_side_cfg_write(buf: *const u8, len: u16) -> bool {
+    if buf.is_null() || (len as usize) < SIDE_CFG_BYTES {
+        return false;
+    }
+    let raw = unsafe { core::slice::from_raw_parts(buf, SIDE_CFG_BYTES) };
+    let wide_band = raw[0] != 0;
+    let power = power_from_raw(raw[1]);
+    let subaudio_rx = subaudio_from_code(u16::from_le_bytes([raw[2], raw[3]]));
+    let subaudio_tx = subaudio_from_code(u16::from_le_bytes([raw[4], raw[5]]));
+    let dir = raw[6];
+    let offset_hz = u32::from_le_bytes([raw[7], raw[8], raw[9], raw[10]]);
+    let ani_raw = i16::from_le_bytes([raw[11], raw[12]]);
+    let ani_target = (ani_raw >= 0).then_some(ani_raw as u8);
+    let freq_step = raw[13];
+
+    let (app, syst) = (app_ref(), syst_ref());
+    let m = app.master_index();
+    let s = &mut app.sides[m];
+    s.cfg.wide_band = wide_band;
+    s.cfg.power = power;
+    s.cfg.subaudio_rx = subaudio_rx;
+    s.cfg.subaudio_tx = subaudio_tx;
+    s.ani_target = ani_target;
+    s.freq_step = freq_step;
+    match s.vfo_chan {
+        ChVfoMode::Vfo => {
+            s.freq_dir = dir;
+            s.offset_hz = offset_hz;
+        }
+        ChVfoMode::Channel => {
+            s.tx_freq_hz = match dir {
+                1 => s.rx_freq_hz.saturating_add(offset_hz),
+                2 => s.rx_freq_hz.saturating_sub(offset_hz),
+                _ => s.rx_freq_hz,
+            };
+        }
+    }
+    app.commit_side_change(syst);
+    true
+}
+
+#[inline(never)]
+extern "C" fn api_factory_reset() -> ! {
+    app_ref().storage_mut().factory_reset();
+    SCB::sys_reset();
+}
+
+#[inline(never)]
+extern "C" fn api_battery_raw12_avg() -> u16 {
+    app_ref().battery_raw12_avg()
 }
 
 static API: Api = Api {
@@ -1319,4 +1448,11 @@ static API: Api = Api {
     correct_measured_freq_word: api_correct_measured_freq_word,
     tune_search_candidate: api_tune_search_candidate,
     save_master_vfo: api_save_master_vfo,
+    settings_read: api_settings_read,
+    settings_preview: api_settings_preview,
+    settings_commit: api_settings_commit,
+    side_cfg_read: api_side_cfg_read,
+    side_cfg_write: api_side_cfg_write,
+    factory_reset: api_factory_reset,
+    battery_raw12_avg: api_battery_raw12_avg,
 };

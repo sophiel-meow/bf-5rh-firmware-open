@@ -1,8 +1,8 @@
+pub(crate) mod boot;
 mod icons;
 mod launcher;
 mod list;
 mod scan;
-mod settings;
 mod standby;
 
 pub(crate) use list::{draw_list, Cache, ListSource};
@@ -116,9 +116,6 @@ pub fn draw(
     match mode {
         app::Mode::AppMenu => {
             launcher::draw_app_menu(lcd, app, &mut state.list)
-        }
-        app::Mode::Settings => {
-            settings::draw_settings(lcd, app, &mut state.list)
         }
         app::Mode::Scan => scan::draw_scan(lcd, app, &mut state.scan),
         app::Mode::External(_) => app::overlay::draw(lcd, app, syst),

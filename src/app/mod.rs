@@ -3,11 +3,9 @@ mod input;
 mod keyfn;
 mod keys;
 mod launcher;
-pub(crate) mod name_edit;
 pub(crate) mod overlay;
 mod scan;
 mod settings;
-mod settings_ops;
 mod side;
 mod side_ops;
 mod tx;
@@ -75,7 +73,6 @@ const RTONE_HZ_DIV_10: [u16; 4] = [100, 145, 175, 210];
 pub enum Mode {
     Standby,
     AppMenu,
-    Settings,
     Scan,
     /// running external app from spi flash
     External(u8),
@@ -103,7 +100,6 @@ pub struct App<'a> {
     mode: Mode,
     sides: [side::Side; 2],
     settings: flash_map::Settings,
-    settings_ui: settings::SettingsUi,
     launcher_index: usize,
 
     master: usize,
@@ -272,16 +268,8 @@ impl<'a> App<'a> {
         radio.set_subaudio_tx(sides[0].cfg.subaudio_tx);
         radio.set_subaudio_rx(sides[0].cfg.subaudio_rx);
         radio.set_modulation(sides[0].cfg.modulation);
-        radio.set_sql_level(syst, settings.sql_level);
-        radio.set_tail_elimination(settings.tail_elimination);
-        radio.set_rptrl(settings.rptrl);
-        radio.set_beeps_enabled(settings.beeps_switch);
-        radio.set_roger_tone(RogerTone::from_u8(settings.roger_tone));
-        radio.set_scramble_level(syst, settings.scramble_level);
-        radio.set_rit_offset(settings.rit_offset as i32 * 10);
-        radio.set_tx_allowed(BandLock::from_u8(settings.band_lock).tx_ranges());
 
-        App {
+        let mut app = App {
             radio,
             chip_id,
             keypad,
@@ -289,7 +277,6 @@ impl<'a> App<'a> {
             mode: Mode::Standby,
             sides,
             settings,
-            settings_ui: settings::SettingsUi::new(),
             launcher_index: 0,
             master: 0,
             watching: 0,
@@ -331,7 +318,26 @@ impl<'a> App<'a> {
             fm_radio,
             utc_secs: bf5rh_abi::UTC_NOT_SET,
             utc_frac: 0,
-        }
+        };
+        app.apply_settings_to_hw(syst);
+        app
+    }
+
+    pub(crate) fn apply_settings_to_hw(&mut self, syst: &mut SYST) {
+        let s = self.settings;
+        self.radio.set_sql_level(syst, s.sql_level);
+        self.radio.set_tail_elimination(s.tail_elimination);
+        self.radio.set_rptrl(s.rptrl);
+        self.radio.set_beeps_enabled(s.beeps_switch);
+        self.radio.set_roger_tone(RogerTone::from_u8(s.roger_tone));
+        self.radio.set_scramble_level(syst, s.scramble_level);
+        self.radio.set_rit_offset(s.rit_offset as i32 * 10);
+        self.radio
+            .set_tx_allowed(BandLock::from_u8(s.band_lock).tx_ranges());
+        self.set_dual_standby(syst, s.dual_standby);
+        self.set_channel_display_mode(channel_display_mode_from_u8(
+            s.channel_display_mode,
+        ));
     }
 
     // UTC wall clock
@@ -788,73 +794,8 @@ impl<'a> App<'a> {
         launcher::is_available_at(self, index)
     }
 
-    // settings UI
-    /// Whether to draw the up/down arrow chrome around the selected row's
-    /// value: true for a cycled Settings item, false while it's in
-    /// text-entry mode
-    /// Returns the currently selected setting item.
-    /// Panics if at the top-level group selection screen.
-    pub(super) fn current_setting_item(&self) -> settings::SettingItem {
-        self.settings_ui.group.expect("not at top level").items()
-            [self.settings_ui.index]
-    }
-
-    pub fn settings_title(&self) -> &'static str {
-        match self.settings_ui.group {
-            Some(g) => g.label(),
-            None => "SETTINGS",
-        }
-    }
-
-    pub fn settings_show_arrows(&self) -> bool {
-        if self.settings_ui.group.is_none() {
-            return false;
-        }
-        self.settings_ui.editing
-            && !matches!(
-                self.current_setting_item(),
-                settings::SettingItem::Offse | settings::SettingItem::BattCal
-            )
-    }
-
-    pub fn settings_index(&self) -> usize {
-        self.settings_ui.index
-    }
-
     pub fn chip_id(&self) -> u16 {
         self.chip_id
-    }
-
-    pub fn settings_item_count(&self) -> usize {
-        match self.settings_ui.group {
-            Some(g) => g.items().len(),
-            None => settings::SETTINGS_GROUPS.len(),
-        }
-    }
-
-    pub fn settings_label_at(&self, index: usize) -> &'static str {
-        match self.settings_ui.group {
-            Some(g) => g.items()[index].label(),
-            None => settings::SETTINGS_GROUPS[index].label(),
-        }
-    }
-
-    pub fn settings_value_at(
-        &self,
-        index: usize,
-        w: &mut dyn core::fmt::Write,
-    ) -> bool {
-        match self.settings_ui.group {
-            Some(g) => {
-                settings_ops::value_text_for(self, index, g.items()[index], w);
-                true
-            }
-            None => false, // top-level: no value, like the launcher
-        }
-    }
-
-    pub fn settings_cursor(&self, _index: usize) -> Option<usize> {
-        None
     }
 
     // PTT
@@ -951,6 +892,9 @@ impl<'a> App<'a> {
     }
     pub fn storage_mut(&mut self) -> &mut Storage<'a> {
         &mut self.storage
+    }
+    pub fn settings(&self) -> &flash_map::Settings {
+        &self.settings
     }
     pub fn fm_radio_mut(&mut self) -> &mut FmRadio<'a> {
         &mut self.fm_radio
