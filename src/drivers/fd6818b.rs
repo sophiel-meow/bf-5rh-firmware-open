@@ -1664,7 +1664,7 @@ impl<'a> Fd6818<'a> {
         self.write_reg(syst, REG_PLL_VCO_BIAS, 0xC65A);
         self.write_reg(syst, REG_FIXED_3E, 0x94C6);
         self.write_reg(syst, REG_ANTI_SPUR, 0x88EF);
-        self.write_reg(syst, REG_OOB_NOISE, 0x3732); // unverified for BK4829
+        self.write_reg(syst, REG_OOB_NOISE, 0x2F2E); // unverified for BK4829
         self.write_reg(syst, REG_DISTORTION, 0x13A0); // unverified for BK4829
 
         self.write_reg(syst, REG_AFC_DISABLE, 0x4691);
