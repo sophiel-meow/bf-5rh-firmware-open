@@ -50,7 +50,7 @@ const POWER_SAVE_SLEEP_TICKS_PER_LEVEL: u16 = 10;
 const BACKLIGHT_STEP_TICKS: u16 = 500;
 
 /// TODO: calibrate per band
-const RSSI_DBM_BASE: i16 = 160;
+const RSSI_DBM_BASE: i16 = 160 + 10;
 
 pub fn rssi_raw_to_dbm(raw: u16) -> i32 {
     raw as i32 - RSSI_DBM_BASE as i32
