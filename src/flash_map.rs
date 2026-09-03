@@ -468,7 +468,7 @@ pub struct Settings {
     pub band_long: u8,
     /// `device::radio::BandLock` index.
     pub band_lock: u8,
-    /// 0=None, 1=Volt, 2=Msg, 3=Logo.
+    /// 0=None, 1=Msg, 2=Logo
     pub boot_display_mode: u8,
     /// Forced off whenever `boot_display_mode` is 0.
     pub boot_sound_enabled: bool,
@@ -532,7 +532,7 @@ impl Settings {
         band_short: 6,  // Scan (physical "SCAN" button)
         band_long: 0,   // None
         band_lock: 0,
-        boot_display_mode: 2,
+        boot_display_mode: 1,
         boot_sound_enabled: false,
         boot_text_line1: [0; 16],
         boot_text_line2: [0; 16],
@@ -572,7 +572,7 @@ impl Settings {
             band_short: buf[27].min(10),
             band_long: buf[28].min(10),
             band_lock: buf[29].min(9),
-            boot_display_mode: buf[30].min(3),
+            boot_display_mode: buf[30].min(2),
             boot_sound_enabled: buf[31] != 0,
             obs_lat: coord_or_unset(
                 i32::from_le_bytes([buf[32], buf[33], buf[34], buf[35]]),

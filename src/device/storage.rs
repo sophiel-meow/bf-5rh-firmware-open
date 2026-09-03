@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::drivers::fd6818b::Power;
+use crate::drivers::fd6818b::{Power, SquelchCal};
 use crate::drivers::norflash::{NorFlash, PAGE_SIZE, SECTOR_SIZE};
 use crate::flash_map::{self, addr, Contact};
 use crate::hal::wear_leveled::WearLeveledRegion;
@@ -79,6 +79,23 @@ impl<'a> Storage<'a> {
         self.norflash
             .read_bytes(crate::drivers::norflash::CAL_BLOCK_ADDR, &mut buf);
         buf
+    }
+
+    pub fn read_squelch_cal(&mut self) -> SquelchCal {
+        let mut cal = SquelchCal::DEFAULT;
+        self.norflash
+            .read_bytes(addr::TH_SQL_TAB_ADDR, &mut cal.th_in);
+        self.norflash
+            .read_bytes(addr::TH_SQL_TAB_MUTE_ADDR, &mut cal.th_out);
+        self.norflash
+            .read_bytes(addr::OFFSET_SQL_U_400_ADDR, &mut cal.off_u400);
+        self.norflash
+            .read_bytes(addr::OFFSET_SQL_U_350_ADDR, &mut cal.off_u350);
+        self.norflash
+            .read_bytes(addr::OFFSET_SQL_V_136_ADDR, &mut cal.off_v136);
+        self.norflash
+            .read_bytes(addr::OFFSET_SQL_V_200_ADDR, &mut cal.off_v200);
+        cal
     }
 
     fn read_pa_byte(&mut self, addr: u32) -> u8 {

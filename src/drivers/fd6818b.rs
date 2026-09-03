@@ -42,7 +42,7 @@ const RXAGC_5_FM: u16 = 0x0210;
 const RXAGC_6_FM: u16 = 0x2AB2;
 const RXAGC_5_AM: u16 = RXAGC_5_FM;
 const RXAGC_6_AM: u16 = RXAGC_6_FM;
-const REG_RXAGC_7: u8 = 0x7B;
+const REG_RSSI_TABLE_LO: u8 = 0x7B;
 /// PA bias output voltage: [3:0] pabias_out, 0000=1.3V .. 1111=2.8V.
 const REG_PA_BIAS: u8 = 0x19;
 const REG_DEVIATION: u8 = 0x40;
@@ -115,16 +115,36 @@ const SUBAUDIO_TAIL_WORD: u16 = 0x01CD | 0x2000;
 /// running a second tone alongside it.
 const SEND_TAIL_WORD: u16 = 0x0471;
 
-/// Squelch-level base RSSI thresholds, index = squelch level 0..9 (0 =
-/// always open).
-const SQL_TH_IN: [u8; 10] = [0, 89, 91, 93, 95, 97, 99, 102, 105, 107];
-/// lower than SQL_TH_IN for closing to prevent chattering
-const SQL_TH_OUT: [u8; 10] = [0, 87, 89, 91, 93, 95, 97, 99, 102, 105];
+#[derive(Clone, Copy)]
+pub struct SquelchCal {
+    /// RSSI threshold to open, indexed by squelch level 0..9 (0 = always
+    /// open). REG 0x78 units, 0.5dB/step.
+    pub th_in: [u8; 10],
+    pub th_out: [u8; 10],
+    pub off_u400: [u8; 16],
+    pub off_u350: [u8; 16],
+    pub off_v136: [u8; 16],
+    pub off_v200: [u8; 16],
+}
 
-const SQL_OFFSET_U_400: [u8; 16] =
-    [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 0, 0, 0];
-const SQL_OFFSET_V_136: [u8; 10] = [4, 4, 4, 4, 4, 4, 4, 4, 2, 2];
-const SQL_OFFSET_V_200: [u8; 16] = [0; 16];
+#[derive(Clone, Copy)]
+enum SqlBand {
+    U400,
+    U350,
+    V136,
+    V200,
+}
+
+impl SquelchCal {
+    pub const DEFAULT: SquelchCal = SquelchCal {
+        th_in: [0, 89, 91, 93, 95, 97, 99, 102, 105, 107],
+        th_out: [0, 87, 89, 91, 93, 95, 97, 99, 102, 105],
+        off_u400: [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 0, 0, 0],
+        off_u350: [0; 16],
+        off_v136: [4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 0, 0, 0, 0, 0, 0],
+        off_v200: [0; 16],
+    };
+}
 
 /// REG 0x33: chip-internal GPIO. bits[15:8] = output-enable-bar (active
 /// low, per bit), bits[7:0] = output value (per bit).
@@ -496,6 +516,7 @@ pub struct Fd6818<'a> {
     tone_active: bool,
     current_wide: bool,
     band_uhf: bool,
+    squelch_cal: SquelchCal,
 }
 
 #[allow(dead_code)]
@@ -512,6 +533,7 @@ impl<'a> Fd6818<'a> {
             dcs_mod_depth: 0,
             pa_target: 100,
             rx_match_bit: SubaudioMatchBit::Ctcss,
+            squelch_cal: SquelchCal::DEFAULT,
             tone_active: false,
             current_wide: true,
             band_uhf: true,
@@ -1253,16 +1275,40 @@ impl<'a> Fd6818<'a> {
         None
     }
 
+    pub fn set_squelch_cal(&mut self, cal: SquelchCal) {
+        self.squelch_cal = cal;
+    }
+
     pub fn set_squelch_level(
         &mut self,
         syst: &mut SYST,
         freq_hz: u32,
         level: u8,
     ) {
-        let level = (level as usize).min(SQL_TH_IN.len() - 1);
-        let offset = Self::squelch_offset(freq_hz);
-        let th_in = SQL_TH_IN[level].saturating_sub(offset);
-        let th_out = SQL_TH_OUT[level].saturating_sub(offset);
+        let cal = &self.squelch_cal;
+        let level = (level as usize).min(cal.th_in.len() - 1);
+        let (th_in, th_out) = match Self::squelch_band_offset(freq_hz) {
+            Some((table, idx)) => {
+                let offset = match table {
+                    SqlBand::U400 => cal.off_u400[idx],
+                    SqlBand::U350 => cal.off_u350[idx],
+                    SqlBand::V136 => cal.off_v136[idx],
+                    SqlBand::V200 => cal.off_v200[idx],
+                };
+                if cal.th_in[level] > offset {
+                    (
+                        cal.th_in[level] - offset,
+                        cal.th_out[level].saturating_sub(offset),
+                    )
+                } else {
+                    (cal.th_in[level], cal.th_out[level])
+                }
+            }
+            None => {
+                let th = cal.th_in[9].saturating_sub(cal.off_v136[0]);
+                (th, th.saturating_sub(3))
+            }
+        };
         self.write_reg(
             syst,
             REG_SQUELCH,
@@ -1270,22 +1316,18 @@ impl<'a> Fd6818<'a> {
         );
     }
 
-    fn squelch_offset(freq_hz: u32) -> u8 {
+    fn squelch_band_offset(freq_hz: u32) -> Option<(SqlBand, usize)> {
         let mhz = freq_hz / 1_000_000;
         if freq_hz >= 400_000_000 {
-            let idx =
-                (((mhz - 400) / 10) as usize).min(SQL_OFFSET_U_400.len() - 1);
-            SQL_OFFSET_U_400[idx]
+            Some((SqlBand::U400, (((mhz - 400) / 10) as usize).min(15)))
+        } else if freq_hz >= 350_000_000 {
+            Some((SqlBand::U350, (((mhz - 350) / 5) as usize).min(15)))
+        } else if (130_000_000..180_000_000).contains(&freq_hz) {
+            Some((SqlBand::V136, (((mhz - 130) / 5) as usize).min(9)))
         } else if freq_hz >= 200_000_000 {
-            let idx =
-                (((mhz - 200) / 5) as usize).min(SQL_OFFSET_V_200.len() - 1);
-            SQL_OFFSET_V_200[idx]
-        } else if freq_hz >= 130_000_000 {
-            let idx =
-                (((mhz - 130) / 5) as usize).min(SQL_OFFSET_V_136.len() - 1);
-            SQL_OFFSET_V_136[idx]
+            Some((SqlBand::V200, (((mhz - 200) / 5) as usize).min(15)))
         } else {
-            0
+            None
         }
     }
 
@@ -1595,7 +1637,7 @@ impl<'a> Fd6818<'a> {
         self.write_reg(syst, REG_RXAGC_4, 0x0318);
         self.write_reg(syst, REG_RXAGC_5, RXAGC_5_FM);
         self.write_reg(syst, REG_RXAGC_6, RXAGC_6_FM);
-        self.write_reg(syst, REG_RXAGC_7, 0x73DC);
+        self.write_reg(syst, REG_RSSI_TABLE_LO, 0x73DC);
 
         // PA bias output: low nibble 0x1 ~= 1.4V
         self.write_reg(syst, REG_PA_BIAS, 0x1041);

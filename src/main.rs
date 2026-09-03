@@ -261,6 +261,7 @@ fn main() -> ! {
     if flag_byte[0] != 0xFF {
         rfic.set_xtal_adjust(cal[6]);
         rfic.set_audio_calibration(cal[0], cal[1], cal[2], cal[3], cal[4]);
+        rfic.set_squelch_cal(storage.read_squelch_cal());
     }
     dbg_println!(
         serial,
@@ -314,21 +315,22 @@ fn main() -> ! {
     let boot_mode = app.settings().boot_display_mode;
     match boot_mode {
         1 => {
-            let cv = app.battery_voltage_cv();
-            ui::boot::draw_voltage(display.as_draw_target(), cv);
+            ui::boot::draw_message(
+                display.as_draw_target(),
+                app.settings(),
+                app.battery_voltage_cv(),
+                app.battery_bars(),
+                chip_id,
+            );
         }
         2 => {
-            ui::boot::draw_message(display.as_draw_target(), app.settings());
-        }
-        3 => {
             let width = flash_map::BOOT_LOGO_WIDTH as u32;
             let rows = flash_map::BOOT_LOGO_HEIGHT / ui::boot::LOGO_CHUNK_ROWS;
             for band in 0..rows {
                 let y0 = band * ui::boot::LOGO_CHUNK_ROWS;
                 let mut chunk = [0u8; ui::boot::LOGO_CHUNK_BYTES];
                 app.storage_mut().read_raw(
-                    flash_map::addr::BOOT_LOGO_ADDR
-                        + y0 as u32 * width * 2,
+                    flash_map::addr::BOOT_LOGO_ADDR + y0 as u32 * width * 2,
                     &mut chunk,
                 );
                 ui::boot::draw_logo_chunk(display.as_draw_target(), y0, &chunk);

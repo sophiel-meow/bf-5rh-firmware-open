@@ -23,7 +23,7 @@ use crate::device::storage::Storage;
 use crate::flash_map::{self, addr};
 use cortex_m::peripheral::SYST;
 
-const FIRMWARE_VERSION: &str = env!("GIT_VERSION");
+pub const FIRMWARE_VERSION: &str = env!("GIT_VERSION");
 
 const STEP_LIST_DECI_HZ: [u32; 9] =
     [250, 500, 625, 1000, 1250, 2000, 2500, 5000, 10000];
@@ -54,6 +54,23 @@ const RSSI_DBM_BASE: i16 = 160;
 
 pub fn rssi_raw_to_dbm(raw: u16) -> i32 {
     raw as i32 - RSSI_DBM_BASE as i32
+}
+
+pub fn s_meter_level_of(dbm: i32) -> u8 {
+    let pos = (-dbm).clamp(53, 141);
+    if pos >= 93 {
+        map(pos, 141, 93, 1, 9).clamp(1, 9) as u8
+    } else {
+        (9 + map(pos, 93, 53, 0, 4).clamp(0, 4)) as u8
+    }
+}
+
+pub fn s_meter_s_number_of(dbm: i32) -> u8 {
+    map((-dbm).clamp(53, 141), 141, 93, 1, 9).clamp(1, 9) as u8
+}
+
+pub fn s_meter_over_s9_of(dbm: i32) -> i32 {
+    (93 - (-dbm).clamp(53, 141)).max(0)
 }
 
 pub const BATTERY_CAL_REFERENCE_CV: u16 = 760;
@@ -105,6 +122,9 @@ pub struct App<'a> {
     master: usize,
     watching: usize,
     last_signal_side: Option<usize>,
+
+    last_signal_peak: Option<(u8, u8)>,
+    signal_held: bool,
 
     input: DigitInput<VFO_INPUT_DIGITS>,
     key_lock: bool,
@@ -281,6 +301,8 @@ impl<'a> App<'a> {
             master: 0,
             watching: 0,
             last_signal_side: None,
+            last_signal_peak: None,
+            signal_held: false,
             input: DigitInput::new(),
             key_lock: false,
             transmitting: false,
@@ -378,6 +400,19 @@ impl<'a> App<'a> {
     pub fn poll_dual_standby(&mut self, syst: &mut SYST, signal_present: bool) {
         if signal_present {
             self.last_signal_side = Some(self.watching);
+        }
+        if signal_present
+            && !self.radio.is_monitor()
+            && !matches!(self.mode, Mode::External(_))
+        {
+            let peak = match self.last_signal_peak {
+                Some((_, peak)) if self.signal_held => peak.max(self.rssi_raw),
+                _ => self.rssi_raw,
+            };
+            self.last_signal_peak = Some((self.watching as u8, peak));
+            self.signal_held = true;
+        } else {
+            self.signal_held = false;
         }
         if !self.dual_standby || self.mode != Mode::Standby || self.transmitting
         {
@@ -717,29 +752,21 @@ impl<'a> App<'a> {
         rssi_raw_to_dbm(self.rssi_raw as u16)
     }
 
-    pub fn s_meter_level(&self) -> u8 {
-        let pos = (-self.rssi_dbm()).clamp(53, 141);
+    pub fn last_signal_peak(&self) -> Option<(usize, i32)> {
+        self.last_signal_peak
+            .map(|(side, raw)| (side as usize, rssi_raw_to_dbm(raw as u16)))
+    }
 
-        if pos >= 93 {
-            map(pos, 141, 93, 1, 9).clamp(1, 9) as u8
-        } else {
-            let over = map(pos, 93, 53, 0, 4).clamp(0, 4);
-            (9 + over) as u8
-        }
+    pub fn s_meter_level(&self) -> u8 {
+        s_meter_level_of(self.rssi_dbm())
     }
 
     pub fn s_meter_s_number(&self) -> u8 {
-        let pos = (-self.rssi_dbm()).clamp(53, 141);
-        map(pos, 141, 93, 1, 9).clamp(1, 9) as u8
+        s_meter_s_number_of(self.rssi_dbm())
     }
 
-    /// How many dB over the S9 reference (-93dBm, matching f4hwn's
-    /// `rssi_dBm >= 93` threshold in its own pos-space) the signal reads,
-    /// 0..40, at full 1dB precision -- not bucketed into 10dB bar
-    /// segments like `s_meter_level`.
     pub fn s_meter_over_s9_dbm(&self) -> i32 {
-        let pos = (-self.rssi_dbm()).clamp(53, 141);
-        (93 - pos).max(0)
+        s_meter_over_s9_of(self.rssi_dbm())
     }
 
     pub fn mic_level(&self) -> u8 {

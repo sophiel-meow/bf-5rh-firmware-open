@@ -1233,7 +1233,7 @@ fn adjust(api: &Api, st: &mut ItemsState, item: SettingItem, up: bool) {
         AniCall => clamp_step(cur, up, -1, CONTACT_COUNT - 1),
 
         #[cfg(feature = "g_system")]
-        BootMode => clamp_step(cur, up, 0, 3),
+        BootMode => clamp_step(cur, up, 0, 2),
         #[cfg(feature = "g_system")]
         BootSnd => {
             if st.settings.boot_display_mode == 0 {
@@ -1513,9 +1513,8 @@ fn value_text_for(
         BootMode => write_str(
             out,
             match current_value(api, st, item) {
-                1 => "VOLT",
-                2 => "MSG",
-                3 => "LOGO",
+                1 => "MSG",
+                2 => "LOGO",
                 _ => "NONE",
             },
         ),

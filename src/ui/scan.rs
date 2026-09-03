@@ -53,7 +53,7 @@ where
             }
             if prev.freq_hz != snap.freq_hz {
                 clear_strip(lcd, FREQ_Y, FREQ_H);
-                draw_frequency(lcd, snap.freq_hz, 60);
+                draw_frequency(lcd, snap.freq_hz, 60, FG);
             }
         }
     }
@@ -68,7 +68,7 @@ where
     clear_strip(lcd, 0, SCREEN_H);
 
     draw_header(lcd, app);
-    draw_frequency(lcd, app.watching_freq_hz(), 60);
+    draw_frequency(lcd, app.watching_freq_hz(), 60, FG);
 
     Text::new(
         "UP/DN STEP  #/EXIT STOP",
