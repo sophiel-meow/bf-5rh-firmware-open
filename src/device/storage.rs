@@ -300,4 +300,8 @@ impl<'a> Storage<'a> {
     pub fn read_raw(&mut self, addr: u32, buf: &mut [u8]) {
         self.norflash.read_bytes(addr, buf);
     }
+
+    pub fn write_raw(&mut self, addr: u32, data: &[u8]) {
+        self.norflash.write_bytes(addr, data);
+    }
 }

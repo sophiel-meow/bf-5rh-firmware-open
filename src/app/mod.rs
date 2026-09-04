@@ -186,6 +186,7 @@ pub struct App<'a> {
 
 impl<'a> App<'a> {
     #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
     pub fn new(
         mut radio: Radio<'a>,
         chip_id: u16,

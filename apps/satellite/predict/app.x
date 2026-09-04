@@ -2,7 +2,7 @@
  * stack, so LENGTH here is ARENA_MAX, not ARENA_SIZE. */
 MEMORY
 {
-  RAM : ORIGIN = 0x200000b8, LENGTH = 32768
+  RAM : ORIGIN = 0x200001C8, LENGTH = 32768
 }
 
 ENTRY(app_entry);

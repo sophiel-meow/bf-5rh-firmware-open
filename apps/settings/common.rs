@@ -992,6 +992,7 @@ fn commit_battery_input(api: &Api, st: &mut ItemsState) {
                 SettingItem::BattCal,
                 new_cal.clamp(1, u16::MAX as u32) as i32,
             );
+            commit_settings(api, &st.settings);
         }
     }
     st.battery_input.clear();
@@ -1065,6 +1066,7 @@ fn commit_coord_input(api: &Api, is_lat: bool, st: &mut ItemsState) {
     if typed {
         let mag = (degrees as i32).saturating_mul(10).min(limit);
         apply(api, st, item, if neg { -mag } else { mag });
+        commit_settings(api, &st.settings);
     }
     if is_lat {
         st.lat_input.clear();

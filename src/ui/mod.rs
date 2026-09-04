@@ -1,4 +1,5 @@
 pub(crate) mod boot;
+pub(crate) mod cps;
 mod icons;
 mod launcher;
 mod list;
@@ -99,6 +100,7 @@ where
     .ok();
 }
 
+#[inline(never)]
 pub fn draw(
     display: &mut Display<'_>,
     app: &mut app::App<'_>,

@@ -3,12 +3,12 @@
 
 mod app;
 mod board;
+mod cps;
 mod device;
 mod drivers;
 mod flash_map;
 mod hal;
 mod ui;
-mod upload;
 
 use at32f421_pac as pac;
 use core::fmt::Write;
@@ -107,10 +107,40 @@ fn check_power_off(
     }
 }
 
+#[inline(never)]
+fn draw_boot_logo(
+    display: &mut device::display::Display<'_>,
+    app: &mut app::App<'_>,
+) {
+    let width = flash_map::BOOT_LOGO_WIDTH as u32;
+    let rows = flash_map::BOOT_LOGO_HEIGHT / ui::boot::LOGO_CHUNK_ROWS;
+    for band in 0..rows {
+        let y0 = band * ui::boot::LOGO_CHUNK_ROWS;
+        let mut chunk = [0u8; ui::boot::LOGO_CHUNK_BYTES];
+        app.storage_mut().read_raw(
+            flash_map::addr::BOOT_LOGO_ADDR + y0 as u32 * width * 2,
+            &mut chunk,
+        );
+        ui::boot::draw_logo_chunk(display.as_draw_target(), y0, &chunk);
+    }
+}
+
 #[entry]
 fn main() -> ! {
     let dp = unsafe { pac::Peripherals::steal() };
     let mut cp = cortex_m::Peripherals::take().unwrap();
+
+    cp.SYST.disable_interrupt();
+    cp.SYST.disable_counter();
+    let nvic = unsafe { &*cortex_m::peripheral::NVIC::PTR };
+    for reg in nvic.icer.iter() {
+        unsafe { reg.write(0xFFFF_FFFF) };
+    }
+    for reg in nvic.icpr.iter() {
+        unsafe { reg.write(0xFFFF_FFFF) };
+    }
+
+    unsafe { cp.SCB.vtor.write(0x0800_1000) };
 
     // GPIOF clock for PF6 (power self-latch)
     dp.crm.ahben().modify(|_, w| w.gpiofen().set_bit());
@@ -229,12 +259,10 @@ fn main() -> ! {
             .set_bit()
     });
 
-    if board::menu_exit_held(&dp.gpiob, &mut cp.SYST) {
-        upload::run(&dp.gpioa, &dp.spi1, &dp.usart1);
-    }
+    unsafe { cortex_m::peripheral::NVIC::unmask(pac::Interrupt::USART1) };
+    unsafe { cortex_m::interrupt::enable() };
 
     let mut serial = Serial { usart1: dp.usart1 };
-    dbg_println!(serial, "\r\nbf5rh-fw: FD6818B/BK4829");
     dbg_println!(
         serial,
         "sclk={SCLK_HZ}Hz (HEXT+PLL, 16MHz crystal) baud={BAUD} div={div}"
@@ -323,19 +351,7 @@ fn main() -> ! {
                 chip_id,
             );
         }
-        2 => {
-            let width = flash_map::BOOT_LOGO_WIDTH as u32;
-            let rows = flash_map::BOOT_LOGO_HEIGHT / ui::boot::LOGO_CHUNK_ROWS;
-            for band in 0..rows {
-                let y0 = band * ui::boot::LOGO_CHUNK_ROWS;
-                let mut chunk = [0u8; ui::boot::LOGO_CHUNK_BYTES];
-                app.storage_mut().read_raw(
-                    flash_map::addr::BOOT_LOGO_ADDR + y0 as u32 * width * 2,
-                    &mut chunk,
-                );
-                ui::boot::draw_logo_chunk(display.as_draw_target(), y0, &chunk);
-            }
-        }
+        2 => draw_boot_logo(&mut display, &mut app),
         // 0 = None: screen is already cleared black from just after
         // `display.init()`, nothing more to draw.
         _ => {}
@@ -367,6 +383,8 @@ fn main() -> ! {
 
     let mut ui_state = ui::UiState::new();
 
+    let mut cps_handshake = cps::HandshakeDetector::new();
+
     let mut fast_tick: u32 = 0;
     let mut real_tick10_last = hal::uptime::now();
     let mut overlay_tick_last = real_tick10_last;
@@ -379,6 +397,10 @@ fn main() -> ! {
             &mut cp.SYST,
         );
         app.poll_keys(&mut cp.SYST);
+
+        if cps_handshake.poll() {
+            cps::run_session(&mut app, &mut cp.SYST, &mut display);
+        }
 
         if let Some(level) = app.radio_mut().poll_ptt() {
             app.set_ptt(&mut cp.SYST, level);

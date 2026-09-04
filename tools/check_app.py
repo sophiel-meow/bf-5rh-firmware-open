@@ -64,6 +64,71 @@ def check_size(header: dict, fw_root: Path) -> tuple[bool, str]:
     )
 
 
+def _fw_symbols(elf: Path) -> dict[str, int]:
+    out = run(["rust-nm", str(elf)]).stdout
+    syms = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 3 and parts[2] in ("__sheap", "_stack_start"):
+            syms[parts[2]] = int(parts[0], 16)
+    return syms
+
+
+def _main_frame(elf: Path) -> int:
+    out = run(["rust-objdump", "-d", "--demangle", str(elf)]).stdout
+    inside = False
+    for line in out.splitlines():
+        s = line.strip()
+        if s.endswith(">:"):
+            inside = "__cortex_m_rt_main" in s
+            continue
+        if inside:
+            # llvm-objdump prints the immediate in hex, GNU objdump in decimal
+            m = re.search(
+                r"\bsubw?(?:\.w|\.n)?\s+sp,\s*(?:sp,\s*)?#(0x[0-9a-f]+|\d+)", s
+            )
+            if m:
+                return int(m.group(1), 0)
+    return 0
+
+
+def check_stack_budget(header: dict, fw_root: Path) -> tuple[bool, str]:
+    limit = mkapp.arena_size(fw_root)
+    oversized = [s for s in header["segments"] if s["image_len"] + s["bss_len"] > limit]
+    if not oversized:
+        return True, "no oversized segment"
+
+    overlay_rs = (fw_root / "src" / "app" / "overlay.rs").read_text()
+    m = re.search(r"OVERSIZE_HEADROOM:\s*usize\s*=\s*(\d+)", overlay_rs)
+    if not m:
+        return False, "missing OVERSIZE_HEADROOM in src/app/overlay.rs"
+    headroom = int(m.group(1))
+    m = re.search(r"CANARY_WORDS:\s*usize\s*=\s*(\d+)", overlay_rs)
+    canary = int(m.group(1)) * 4 if m else 16
+
+    elf = fw_root / "target" / "thumbv7em-none-eabi" / "release" / "bf5rh-fw"
+    if not elf.exists():
+        return False, f"no firmware ELF at {elf}"
+    syms = _fw_symbols(elf)
+    if "__sheap" not in syms or "_stack_start" not in syms:
+        return False, "firmware ELF has no __sheap/_stack_start"
+    region = syms["_stack_start"] - syms["__sheap"]
+    frame = _main_frame(elf)
+    if frame == 0:
+        return False, "could not read __cortex_m_rt_main's frame size"
+    live = frame + 256
+
+    worst = max(s["image_len"] + s["bss_len"] for s in oversized)
+    ext = worst - limit
+    allowed = region - (ext + canary + headroom)
+    detail = (
+        f"stack {region}B, main frame {frame}B, biggest oversized segment "
+        f"{worst}B -> depth allowance {allowed}B vs ~{live}B live "
+        f"({allowed - live:+}B)"
+    )
+    return allowed >= live, detail
+
+
 def check_crc(header: dict) -> tuple[bool, str]:
     data = header["data"]
     for i, seg in enumerate(header["segments"]):
@@ -125,6 +190,7 @@ def main() -> int:
     results = [
         ("build_hash ok", check_build_hash(header, fw_root)),
         ("size ok", check_size(header, fw_root)),
+        ("stack budget ok", check_stack_budget(header, fw_root)),
         ("crc ok", check_crc(header)),
     ]
 

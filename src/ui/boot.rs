@@ -194,6 +194,7 @@ where
     );
 }
 
+#[inline(never)]
 pub fn draw_message<D>(
     lcd: &mut D,
     settings: &Settings,

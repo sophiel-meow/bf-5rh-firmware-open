@@ -94,6 +94,7 @@ struct State {
 
     status: u8,
     pending: Pending,
+    chain_job: Option<u8>,
 }
 
 static mut STATE: State = State {
@@ -108,6 +109,7 @@ static mut STATE: State = State {
     tle_age: 0,
     status: ST_OK,
     pending: Pending::None,
+    chain_job: None,
 };
 
 /// The combined pass table, read back from flash and sorted by AOS in
@@ -175,7 +177,16 @@ pub extern "C" fn app_entry(api: &Api, ev: AppEvent) -> AppResult {
         AppEvent::Enter => enter(api),
         AppEvent::Key { id, kind } => key(api, kind, id),
         AppEvent::Draw => draw(api),
-        AppEvent::Tick { .. } | AppEvent::Leave => AppResult::Continue,
+        AppEvent::Tick { .. } => tick(api),
+        AppEvent::Leave => AppResult::Continue,
+    }
+}
+
+fn tick(api: &Api) -> AppResult {
+    let st = state();
+    match st.chain_job.take() {
+        Some(job) => chain_predict(api, st, job),
+        None => AppResult::Continue,
     }
 }
 
@@ -435,7 +446,8 @@ fn draw(api: &Api) -> AppResult {
     let st = state();
 
     // The predict segment cannot draw, so the banner has to be on screen
-    // before the chain, which means chaining out of Draw rather than Key.
+    // before the chain, which means queuing the chain out of Draw rather
+    // than Key.
     if st.pending != Pending::None {
         let job = if st.pending == Pending::Search {
             JOB_SEARCH
@@ -444,7 +456,8 @@ fn draw(api: &Api) -> AppResult {
         };
         st.pending = Pending::None;
         draw_predict_banner(api, job);
-        return chain_predict(api, st, job);
+        st.chain_job = Some(job);
+        return AppResult::Continue;
     }
 
     match st.page {
