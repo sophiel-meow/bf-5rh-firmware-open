@@ -705,6 +705,10 @@ impl<'a> Radio<'a> {
         self.rssi_open
     }
 
+    pub fn chip_squelch_open(&mut self, syst: &mut SYST) -> bool {
+        self.fd6818.squelch_open(syst)
+    }
+
     pub fn poll_squelch(
         &mut self,
         syst: &mut SYST,
@@ -786,6 +790,26 @@ impl<'a> Radio<'a> {
 
     pub fn rssi(&mut self, syst: &mut SYST) -> u16 {
         self.fd6818.get_rssi(syst)
+    }
+
+    pub fn set_agc_fix(&mut self, syst: &mut SYST, rank: Option<u8>) {
+        self.fd6818.set_agc_fix(syst, rank);
+    }
+
+    pub fn app_af_out(&mut self, syst: &mut SYST, on: bool) {
+        let state = if on {
+            AfOutState::RxAudio
+        } else {
+            AfOutState::Mute
+        };
+        self.fd6818.set_af_out(
+            syst,
+            state,
+            self.cfg.wide_band,
+            self.cfg.modulation,
+        );
+        self.audio_open = on;
+        self.set_speaker(on);
     }
 
     pub fn audio_is_open(&self) -> bool {

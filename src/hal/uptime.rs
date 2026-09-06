@@ -19,3 +19,17 @@ pub fn now() -> u16 {
     let tmr = unsafe { &*pac::Tmr14::ptr() };
     tmr.cval().read().cval().bits()
 }
+
+static mut LAST16: u16 = 0;
+static mut HIGH: u32 = 0;
+
+pub fn now32() -> u32 {
+    let n = now();
+    unsafe {
+        if n < LAST16 {
+            HIGH = HIGH.wrapping_add(0x1_0000);
+        }
+        LAST16 = n;
+        HIGH.wrapping_add(n as u32)
+    }
+}

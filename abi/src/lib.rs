@@ -179,6 +179,10 @@ pub struct Api {
     pub side_cfg_write: extern "C" fn(buf: *const u8, len: u16) -> bool,
     pub factory_reset: extern "C" fn() -> !,
     pub battery_raw12_avg: extern "C" fn() -> u16,
+
+    pub set_holds_rx: extern "C" fn(on: bool),
+    pub set_af_out: extern "C" fn(on: bool),
+    pub set_agc_fix: extern "C" fn(rank: i8),
 }
 
 /// `settings_get(5)` / `settings_get(6)` when no position has been entered.

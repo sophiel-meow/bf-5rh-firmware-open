@@ -406,6 +406,8 @@ fn main() -> ! {
             app.set_ptt(&mut cp.SYST, level);
         }
 
+        let _ = hal::uptime::now32();
+
         let elapsed10 = hal::uptime::now().wrapping_sub(real_tick10_last);
         if elapsed10 >= 100 {
             let n10 = elapsed10 / 100;

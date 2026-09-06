@@ -20,6 +20,7 @@ DEFAULT_APPS: list[tuple[int, Path]] = [
     (4, APPS_DIR / "scanqt.app"),
     (5, APPS_DIR / "search.app"),
     (6, APPS_DIR / "settings.app"),
+    (7, APPS_DIR / "spectrum.app"),
 ]
 
 

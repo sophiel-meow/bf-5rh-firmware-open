@@ -466,7 +466,7 @@ pub(crate) fn draw(lcd: &mut St7735<'_>, app: &mut App, syst: &mut SYST) {
 
 #[inline(never)]
 extern "C" fn api_uptime_100us() -> u32 {
-    crate::hal::uptime::now() as u32
+    crate::hal::uptime::now32()
 }
 
 #[inline(never)]
@@ -1165,7 +1165,12 @@ extern "C" fn api_get_master_wide() -> bool {
 
 #[inline(never)]
 extern "C" fn api_squelch_open() -> bool {
-    app_ref().rssi_open()
+    if unsafe { APP_HOLDS_RX } {
+        app_ref().rssi_open()
+    } else {
+        let (app, syst) = (app_ref(), syst_ref());
+        app.radio_mut().chip_squelch_open(syst)
+    }
 }
 
 #[inline(never)]
@@ -1382,6 +1387,24 @@ extern "C" fn api_battery_raw12_avg() -> u16 {
     app_ref().battery_raw12_avg()
 }
 
+#[inline(never)]
+extern "C" fn api_set_holds_rx(on: bool) {
+    unsafe { APP_HOLDS_RX = on };
+}
+
+#[inline(never)]
+extern "C" fn api_set_af_out(on: bool) {
+    let (app, syst) = (app_ref(), syst_ref());
+    app.radio_mut().app_af_out(syst, on);
+}
+
+#[inline(never)]
+extern "C" fn api_set_agc_fix(rank: i8) {
+    let (app, syst) = (app_ref(), syst_ref());
+    let rank = if rank < 0 { None } else { Some(rank as u8) };
+    app.radio_mut().set_agc_fix(syst, rank);
+}
+
 static API: Api = Api {
     uptime_100us: api_uptime_100us,
     delay_ms: api_delay_ms,
@@ -1455,4 +1478,7 @@ static API: Api = Api {
     side_cfg_write: api_side_cfg_write,
     factory_reset: api_factory_reset,
     battery_raw12_avg: api_battery_raw12_avg,
+    set_holds_rx: api_set_holds_rx,
+    set_af_out: api_set_af_out,
+    set_agc_fix: api_set_agc_fix,
 };

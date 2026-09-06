@@ -38,6 +38,9 @@ const REG_RXAGC_3: u8 = 0x11;
 const REG_RXAGC_4: u8 = 0x10;
 const REG_RXAGC_5: u8 = 0x14;
 const REG_RXAGC_6: u8 = 0x49;
+
+const REG_AGC_MODE: u8 = 0x7E;
+const AGC_INDEX_BY_RANK: [u16; 8] = [3, 2, 1, 0, 7, 6, 5, 4];
 const RXAGC_5_FM: u16 = 0x0210;
 const RXAGC_6_FM: u16 = 0x2AB2;
 const RXAGC_5_AM: u16 = RXAGC_5_FM;
@@ -1565,6 +1568,18 @@ impl<'a> Fd6818<'a> {
     /// REG 0x67[8:1]：RSSI
     pub fn get_rssi(&mut self, syst: &mut SYST) -> u16 {
         (self.read_reg(syst, REG_RSSI) & 0x01FF) >> 1
+    }
+
+    pub fn set_agc_fix(&mut self, syst: &mut SYST, rank: Option<u8>) {
+        let cur = self.read_reg(syst, REG_AGC_MODE);
+        let base = cur & 0x0FFF;
+        let value = match rank {
+            Some(r) => {
+                0x8000 | (AGC_INDEX_BY_RANK[(r as usize).min(7)] << 12) | base
+            }
+            None => (0b011 << 12) | base,
+        };
+        self.write_reg(syst, REG_AGC_MODE, value);
     }
 
     pub fn wait_rssi_settled(&mut self, syst: &mut SYST) {

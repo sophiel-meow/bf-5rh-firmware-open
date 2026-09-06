@@ -33,7 +33,7 @@
           buildInputs = [
             rust-toolchain
             pkgs.cargo-binutils
-            (pkgs.python3.withPackages (ps: [ ps.pyserial ]))
+            (pkgs.python3.withPackages (ps: [ ps.pyserial ps.pillow ]))
             pkgs.gnumake
           ];
 
